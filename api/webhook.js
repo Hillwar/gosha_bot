@@ -385,19 +385,12 @@ async function handleCommand(message) {
     case '/circlerules':
       console.log(`Sending circle rules to ${chatId} with image: ${circleRulesImageUrl}`);
       try {
-        // Сокращаем текст правил, если он слишком длинный для подписи к фото
-        const maxCaptionLength = 1000; // Telegram ограничивает подписи около 1024 символов
-        let caption = circleRules;
-        
-        if (caption.length > maxCaptionLength) {
-          caption = caption.substring(0, maxCaptionLength - 100) + 
-            "...\n\nПолная версия правил доступна по команде /rules_text";
-        }
-        
-        await sendPhoto(chatId, circleRulesImageUrl, caption);
+        // Отправляем фото с полным текстом правил
+        await sendPhoto(chatId, circleRulesImageUrl, circleRules);
       } catch (error) {
         console.error('Error sending circle rules:', error);
-        await sendMessage(chatId, `Произошла ошибка при отправке правил с изображением. Вот текстовая версия:\n\n${circleRules}`);
+        // В случае ошибки отправляем только текст
+        await sendMessage(chatId, `Правила орлятского круга:\n\n${circleRules}`);
       }
       break;
       
