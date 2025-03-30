@@ -104,6 +104,41 @@ Dm             Am   E                 Am
     group: 1,
     rhythm: "Перебор",
     notes: "Припев играется на повышенных тонах"
+  },
+  {
+    title: "Паруса",
+    author: "Константин Тарасов",
+    lyrics: `Am                      E
+Всё в жизни перепробовал - и убедился я:
+    Dm                       Am
+Не шапка красит голову, друзья не красят друга,
+   C                 G
+И если ты с получки разоришься не дотла -
+       Dm             E          Am
+Скажи спасибо, братец, что в стране у нас - весна.
+
+А за весною лето, снова высохнет вода,
+А за зимою - осень, и весна придёт сама,
+И снова вспыхнет солнце, и его лучом согреты
+Паруса, паруса, паруса, паруса, паруса!
+
+Вот тебе, вот и мне подарил Бог крылья,
+А горизонт опять отодвинулся, и всё опять сначала.
+Всё, что оставим мы - подарим мы снова 
+Поднявшим паруса, паруса, паруса, паруса, паруса!
+
+Посуди: для того ль небеса распахнуты  
+Для тебя и меня, и для Вас - смысл скрытый странною игрою,
+У странствий нить, а нам по ней идти, 
+И свободы чуть-чуть подарить поднявшим паруса!
+
+Вот тебе, вот и мне подарил Бог крылья,
+А горизонт опять отодвинулся, и всё опять сначала.
+Всё, что оставим мы - подарим мы снова 
+Поднявшим паруса, паруса, паруса, паруса, паруса!`,
+    group: 1,
+    rhythm: "Простой бой",
+    notes: ""
   }
 ];
 
@@ -154,33 +189,51 @@ async function sendMessage(chatId, text, options = {}) {
 
 // Отправка фото с подписью
 async function sendPhoto(chatId, photoUrl, caption, options = {}) {
-  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
-  const payload = {
-    chat_id: chatId,
-    photo: photoUrl,
-    caption: caption,
-    parse_mode: options.parse_mode || 'HTML',
-    ...options
-  };
+  console.log(`Sending photo to ${chatId}, URL: ${photoUrl}, Caption length: ${caption.length}`);
   
   try {
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
+    const payload = {
+      chat_id: chatId,
+      photo: photoUrl,
+      caption: caption,
+      parse_mode: options.parse_mode || 'HTML',
+      ...options
+    };
+    
     const response = await axios.post(url, payload);
+    console.log('Photo sent successfully:', response.data);
     return response.data;
   } catch (error) {
-    console.error('Error sending photo:', error);
+    console.error('Error sending photo:', error.response ? error.response.data : error.message);
+    
+    // Если не удалось отправить фото, отправляем хотя бы текст
+    await sendMessage(chatId, `Не удалось отправить изображение. Правила орлятского круга:\n\n${caption}`);
     return null;
   }
 }
 
 // Поиск песни по названию или автору
 function findSong(query) {
-  query = query.toLowerCase();
+  if (!query || query.trim() === '') {
+    return [];
+  }
   
-  return songbook.filter(song => {
-    return song.title.toLowerCase().includes(query) || 
-           (song.author && song.author.toLowerCase().includes(query)) ||
-           song.lyrics.toLowerCase().includes(query);
+  query = query.toLowerCase().trim();
+  console.log(`Searching for songs with query: "${query}"`);
+  
+  const results = songbook.filter(song => {
+    const titleMatch = song.title && song.title.toLowerCase().includes(query);
+    const authorMatch = song.author && song.author.toLowerCase().includes(query);
+    const lyricsMatch = song.lyrics && song.lyrics.toLowerCase().includes(query);
+    
+    console.log(`Song: ${song.title}, Title match: ${titleMatch}, Author match: ${authorMatch}, Lyrics match: ${lyricsMatch}`);
+    
+    return titleMatch || authorMatch || lyricsMatch;
   });
+  
+  console.log(`Found ${results.length} songs matching "${query}"`);
+  return results;
 }
 
 // Форматирование песни для вывода
@@ -266,6 +319,8 @@ async function handleCommand(message) {
   const chatId = message.chat.id;
   const text = message.text;
   
+  console.log(`Handling command: ${text} from chat ${chatId}`);
+  
   // Извлечение команды и аргументов
   const [command, ...args] = text.split(' ');
   const query = args.join(' ');
@@ -328,12 +383,33 @@ async function handleCommand(message) {
       break;
       
     case '/circlerules':
-      // Отправляем фото с правилами и текст
-      await sendPhoto(chatId, circleRulesImageUrl, circleRules);
+      console.log(`Sending circle rules to ${chatId} with image: ${circleRulesImageUrl}`);
+      try {
+        // Сокращаем текст правил, если он слишком длинный для подписи к фото
+        const maxCaptionLength = 1000; // Telegram ограничивает подписи около 1024 символов
+        let caption = circleRules;
+        
+        if (caption.length > maxCaptionLength) {
+          caption = caption.substring(0, maxCaptionLength - 100) + 
+            "...\n\nПолная версия правил доступна по команде /rules_text";
+        }
+        
+        await sendPhoto(chatId, circleRulesImageUrl, caption);
+      } catch (error) {
+        console.error('Error sending circle rules:', error);
+        await sendMessage(chatId, `Произошла ошибка при отправке правил с изображением. Вот текстовая версия:\n\n${circleRules}`);
+      }
+      break;
+      
+    case '/rules_text':
+      // Отправляем только текст правил без изображения
+      await sendMessage(chatId, circleRules);
       break;
       
     case '/status':
-      await sendMessage(chatId, getSongsStatistics());
+      console.log(`Sending status to ${chatId}, stats entries: ${Object.keys(songsStats).length}`);
+      const statsMessage = getSongsStatistics();
+      await sendMessage(chatId, statsMessage);
       break;
       
     case '/list':
@@ -450,23 +526,39 @@ module.exports = async (req, res) => {
   
   // Для POST-запросов обрабатываем обновления от Telegram
   if (req.method === 'POST') {
+    console.log('Received update from Telegram:', JSON.stringify(req.body));
+    
     const update = req.body;
     
-    if (update.callback_query) {
-      // Обработка callback-запросов (кнопки)
-      await handleCallback(update.callback_query);
-    } else if (update.message) {
-      if (update.message.text && update.message.text.startsWith('/')) {
-        // Обработка команд (текст, начинающийся с /)
-        await handleCommand(update.message);
+    try {
+      if (update.callback_query) {
+        // Обработка callback-запросов (кнопки)
+        console.log('Processing callback query:', update.callback_query.data);
+        await handleCallback(update.callback_query);
+      } else if (update.message) {
+        if (update.message.text && update.message.text.startsWith('/')) {
+          // Обработка команд (текст, начинающийся с /)
+          console.log('Processing command:', update.message.text);
+          await handleCommand(update.message);
+        } else {
+          // Обработка обычных сообщений
+          console.log('Processing message:', update.message.text || 'non-text message');
+          await handleNonCommandMessage(update.message);
+        }
       } else {
-        // Обработка обычных сообщений
-        await handleNonCommandMessage(update.message);
+        console.log('Unknown update type:', update);
       }
+      
+      // Отправляем успешный ответ
+      res.status(200).send('OK');
+    } catch (error) {
+      console.error('Error processing update:', error);
+      
+      // Даже при ошибке отправляем успешный ответ Telegram,
+      // чтобы не получать повторные запросы с тем же обновлением
+      res.status(200).send('Error processed');
     }
     
-    // Отправляем успешный ответ
-    res.status(200).send('OK');
     return;
   }
   
