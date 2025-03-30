@@ -1,6 +1,6 @@
 # Gosha Telegram Bot
 
-Telegram bot for Gosha63_bot (@Gosha63_bot). This bot provides various features including:
+Telegram bot for Gosha demo (@gosha_demo_bot). This bot provides various features including:
 
 - Anecdotes
 - Guitar chords and songs
@@ -21,13 +21,13 @@ This bot can be hosted on Vercel by following these steps:
 
 2. Once deployed, set up the Telegram webhook by visiting:
    ```
-   https://api.telegram.org/bot6250412206:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs/setWebhook?url=https://your-vercel-app.vercel.app/api/webhook
+   https://api.telegram.org/bot7746110687:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs/setWebhook?url=https://your-vercel-app.vercel.app/api/webhook
    ```
    (Replace `your-vercel-app.vercel.app` with your actual Vercel deployment URL)
 
 3. Verify the webhook is working by visiting:
    ```
-   https://api.telegram.org/bot6250412206:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs/getWebhookInfo
+   https://api.telegram.org/bot7746110687:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs/getWebhookInfo
    ```
 
 ## Local Development
