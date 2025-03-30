@@ -65,9 +65,61 @@ const handleCommand = async (command, chatId) => {
 
 // Handler for incoming updates
 module.exports = async (req, res) => {
-  // Only accept POST requests
+  console.log("Received request:", req.method, req.url);
+  
+  // Route for setting webhook
+  if (req.url && req.url.includes('/set-webhook')) {
+    try {
+      // Extract the URL from query parameters
+      const url = req.query.url;
+      
+      if (!url) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "Missing 'url' parameter" 
+        });
+      }
+      
+      // Make request to Telegram API to set webhook
+      const response = await axios.get(`${apiUrl}/setWebhook?url=${encodeURIComponent(url)}`);
+      return res.status(200).json(response.data);
+    } catch (error) {
+      console.error('Error setting webhook:', error);
+      return res.status(500).json({ 
+        ok: false, 
+        error: error.message 
+      });
+    }
+  }
+  
+  // Route for getting webhook info
+  if (req.url && req.url.includes('/webhook-info')) {
+    try {
+      const response = await axios.get(`${apiUrl}/getWebhookInfo`);
+      return res.status(200).json(response.data);
+    } catch (error) {
+      console.error('Error getting webhook info:', error);
+      return res.status(500).json({ 
+        ok: false, 
+        error: error.message 
+      });
+    }
+  }
+  
+  // Route for pinging the server
+  if (req.url && req.url.includes('/ping')) {
+    return res.status(200).json({ 
+      ok: true, 
+      message: "Bot server is running!" 
+    });
+  }
+  
+  // Bot webhook handler (default route)
   if (req.method !== 'POST') {
-    return res.status(200).json({ ok: true, message: 'Telegram bot webhook is active' });
+    return res.status(200).json({ 
+      ok: true, 
+      message: 'Telegram bot webhook is active. Use /api/webhook/set-webhook?url=YOUR_URL to set webhook.' 
+    });
   }
 
   try {

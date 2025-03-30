@@ -10,6 +10,18 @@
     {
       "src": "/api/webhook",
       "dest": "/api/webhook.js"
+    },
+    {
+      "src": "/api/webhook/set-webhook",
+      "dest": "/api/webhook.js"
+    },
+    {
+      "src": "/api/webhook/webhook-info",
+      "dest": "/api/webhook.js"
+    },
+    {
+      "src": "/api/webhook/ping",
+      "dest": "/api/webhook.js"
     }
   ]
 } 
