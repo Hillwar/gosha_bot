@@ -1,564 +1,475 @@
-// Код адаптирован для Vercel из оригинального бота @Gosha63
 const axios = require('axios');
 
-// Конфигурация бота
-const authorTelegram = "@Hleb66613";
-const botTelegram = "@gosha_demo_bot";
-const apiToken = "7746110687:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs";
-const apiUrl = "https://api.telegram.org/bot" + apiToken;
-const botId = "7746110687";
+// Токен бота
+const BOT_TOKEN = '7746110687:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs';
+const BOT_NAME = 'gosha_demo_bot';
+const WEBHOOK_URL = 'https://gosha-bot.vercel.app/api/webhook';
 
-// Имитация функций Google Documents для хранения данных
-// В реальном приложении здесь должна быть база данных или другой способ хранения
-const anecdotes = [
-  { getRow: (i) => ({ getText: () => "Колобок повесился" }) },
-  { getRow: (i) => ({ getText: () => "У программиста спрашивают:\n- Как вы занимаетесь сексом?\nОн отвечает:\n- Да как обычно...\n1. Ввод-вывод\n2. Обработка\n3. Ввод-вывод\n4. Обработка\n5. Ввод-вывод\n6. Обработка\n7. Ввод-вывод\n8. Откат последней операции\n9. Ввод-вывод\n10. Завершение программы\n11. Аварийное восстановление" }) },
-  { getRow: (i) => ({ getText: () => "Разговаривают два программиста:\n- Что это у тебя за шрам на лбу?\n- Да вчера хотел чай налить в кружку, подвигал курсор мышкой и автоматически нажал кнопку, тут же переключился на чайник и щелкнул кнопкой..." }) }
-];
+// Ссылка на документ Google с аккордами
+const SONGBOOK_URL = 'https://docs.google.com/document/d/1e7t6SXSQKO9DMIMehiY_8NwHcQQQ1OVv/edit';
 
-const swears = [
-  { getRow: (i) => ({ getText: () => "блядь" }) },
-  { getRow: (i) => ({ getText: () => "хуй" }) },
-  { getRow: (i) => ({ getText: () => "пизда" }) },
-  { getRow: (i) => ({ getText: () => "ебать" }) }
-];
+// Объект для хранения статистики песен
+let songsStats = {};
 
-const responses = [
-  { getRow: (i) => ({ getText: () => "Я тебя не понимаю :)" }) },
-  { getRow: (i) => ({ getText: () => "Что ты имеешь в виду?" }) },
-  { getRow: (i) => ({ getText: () => "Не могу разобрать, что ты пишешь" }) },
-  { getRow: (i) => ({ getText: () => "Напиши /help, чтобы посмотреть список команд" }) }
-];
+// Время последнего запроса для каждой песни
+let lastSongRequests = {};
 
-const chords = [
-  { 
-    getRow: (i) => {
-      const rows = [
-        "Кино - Пачка сигарет",  // 0 - title
-        "6/8",                   // 1 - rhythm
-        "Кино",                  // 2 - group
-        "В. Цой",                // 3 - authors
-        "",                      // 4 - features
-        "",                      // 5 - voice
-        "",                      // 6 - telegramVideo
-        "https://www.youtube.com/watch?v=v0uSOjnRm3U", // 7 - webVideo
-        "Я сижу и смотрю в чужое небо из чужого окна\nИ не вижу ни одной знакомой звезды.\nЯ ходил по всем дорогам и туда, и сюда,\nОбернулся - и не смог разглядеть следы.\n\nНо если есть в кармане пачка сигарет,\nЗначит всё не так уж плохо на сегодняшний день.\nИ билет на самолёт с серебристым крылом,\nЧто, взлетая, оставляет земле лишь тень.\n\nИ никто не хотел быть виноватым без вина,\nИ никто не хотел руками жар загребать,\nА без музыки на миру смерть не красна,\nА без музыки не хочется пропадать.\n\nНо если есть в кармане пачка сигарет,\nЗначит всё не так уж плохо на сегодняшний день.\nИ билет на самолёт с серебристым крылом,\nЧто, взлетая, оставляет земле лишь тень."  // 8 - chords
-      ];
-      return { getText: () => rows[i] };
-    }
+// Песни из аккордника (будет заполняться динамически)
+const songbook = [
+  {
+    title: "Атланты",
+    author: "Александр Городницкий",
+    lyrics: `Am             Dm          E                 Am
+1.Когда на сердце тяжесть, и холодно в груди,
+Am             Dm        G                 C
+К ступеням Эрмитажа ты в сумерках приди.
+A7                Dm    G                 C
+Где без питья и хлеба, забытые в веках,
+Dm             Am   E                 Am
+Атланты держат небо на каменных руках.
+
+2.Держать его махину не мёд со стороны,
+Напряжены их спины, колени сведены.
+Их тяжкая работа важнее всех работ:
+Из них ослабнет кто-то, и небо упадёт.
+
+3.Во тьме заплачут вдовы, повыгорят поля,
+И встанет гриб лиловый, и кончится Земля.
+А небо год от года всё давит тяжелей,
+Дрожит оно от гуда ракетных кораблей.
+
+4.Стоят они - ребята, точёные тела,
+Поставлены когда-то, а смена не пришла.
+Их свет дневной не радует, им ночью не до сна.
+Их красоту снарядами уродует война.
+
+5.Стоят они навеки, упершись лбы в беду.
+Не боги человеки, привыкшие к труду.
+И жить еще надежде до той поры, пока
+Атланты небо держат на каменных руках.`,
+    group: 1,
+    rhythm: "Простой бой (четырёхдольный)",
+    notes: "Последние строчки куплета х2"
   },
-  { 
-    getRow: (i) => {
-      const rows = [
-        "ДДТ - Что такое осень",  // 0 - title
-        "4/4",                     // 1 - rhythm
-        "ДДТ",                     // 2 - group
-        "Ю. Шевчук",               // 3 - authors
-        "",                        // 4 - features
-        "",                        // 5 - voice
-        "",                        // 6 - telegramVideo
-        "https://www.youtube.com/watch?v=5KC-iscJtsI", // 7 - webVideo
-        "Что такое осень - это небо,\nПлачущее небо под ногами.\nВ лужах разлетаются птицы с облаками.\nОсень, я давно с тобою не был.\n\nВ лужах разлетаются птицы с облаками.\nОсень, я давно с тобою не был.\nЭто трудно вытравить словами.\nЧто такое осень - это ветер вдруг."  // 8 - chords
-      ];
-      return { getText: () => rows[i] };
-    }
+  {
+    title: "Перевал",
+    author: "Юрий Визбор",
+    lyrics: `      Am                  Dm
+Просто нечего нам больше терять,
+    G                      C  E
+Все потеряно, проиграно в прах.
+     Am                    Dm
+И осталась в этом мире одна
+     H7                  E
+В трех вокзалах земля и зола.
+
+             Am        Dm
+Перевал, перевал, перевал,
+             G         C  E
+Перевал, перевал, перевал,
+        Am              Dm
+Мы затеряны в этой стране,
+        H7              E
+Наше время на этой войне.
+
+В черный цвет окрасилась трава,
+В красный цвет окрасилась река.
+А беда, она везде одна,
+Словно снег, словно смерть, как стена.
+
+Перевал, перевал, перевал,
+Перевал, перевал, перевал,
+Мы затеряны в этой стране,
+Наше время на этой войне.
+
+Напиши письмецо да отцу,
+Напиши, как живешь, как дела.
+Что же делать, война есть война,
+По-другому ее не назвать.
+
+Перевал, перевал, перевал,
+Перевал, перевал, перевал,
+Мы затеряны в этой стране,
+Наше время на этой войне.
+
+Просто нечего нам больше терять,
+Пусть сожженные огнем города.
+И осталась в этом мире одна
+В трех вокзалах земля и зола.
+
+Перевал, перевал, перевал,
+Перевал, перевал, перевал,
+Мы затеряны в этой стране,
+Наше время на этой войне.`,
+    group: 1,
+    rhythm: "Перебор",
+    notes: "Припев играется на повышенных тонах"
   }
 ];
 
-const strumming = [
-  { 
-    getRow: (i) => {
-      const rows = [
-        "Простой бой",  // 0 - title
-        "Самый простой бой, подходит для начинающих",  // 1 - features
-        "AgACAgIAAxkBAAIRUGSDVgma-DKvt5QVzVdBR_JyLYXMAAL5yTEbFPIYSKY8WFvYxKYOAQADAgADeQADLwQ",  // 2 - photo
-        "AwACAgIAAxkBAAIRVGSDViY4iL2rFDQIrJsQzBFfKMPSAAJaMAACFPIYSGxrznTFE0M6LwQ",  // 3 - voice
-        "",  // 4 - telegramVideo
-        ""   // 5 - webVideo
-      ];
-      return { getText: () => rows[i] };
-    }
-  }
-];
+// Правила орлятского круга
+const circleRules = `ПРАВИЛА ОРЛЯТСКОГО КРУГА
 
-const circleRulesPhotoFileId = "AgACAgIAAxkBAAIRT2SDVgm3Y-Z7Vn3dWSyxUN5aMdPxAAL4yTEbFPIYSL1ak6-yr6pZAQADAgADeQADLwQ";
+1. Орлятский круг - важная завершающая часть дня/общей встречи. Не опаздывай на него. Мы тебя ждём.
+2. Пускай в круг каждого.
+3. Если вы не пустили в круг, вам важно подойти после круга и объяснить товарищу почему.
+4. Будь опрятным сам и напомни об опрятности другому.
+5. Встаём в круг мальчик-девочка (по возможности)
+6. Круг должен быть круглым. Это очень просто сделать! Просто обними товарищей сбоку и отходи максимально назад (без разрывания круга. Посмотри по сторонам. Ты должен видеть лицо каждого.
+7. Покачиваемся в противоположную от противоположной стороны сторону. Направление и темп задаёт ДКС/ДКЗ/Командир
+8. Если песню запел и поёт один человек, то не прерываем. Не бойся и поддержи его, если знаешь часть слов!
+8. Ориентируемся по пению на человека с гитарой.
+9. Если случилось так, что два человека/две части круга запели одновременно, то оба/обе должны замолчать и уступить время третьей песне.
+10. Не пересекай круг без острой необходимости.
+Если круг не сомкнут , то его можно пересечь.
+11. Уважительно относись к песне и она даст тебе сил.
+12. После орлятского круга не поём орлятские песни и стараемся не шуметь.
+13. Нельзя перебивать завершающую песню 
+14. Не пропускай орлятские круги.
 
-// Класс для представления песни
-class Song {
-  constructor(table, tableNumber) {
-    this.title = "Название: " + table.getRow(0).getText() + "\n";
-    this.rhytm = "Ритмика: " + table.getRow(1).getText() + "\n";
-    this.group = "Группа: " + table.getRow(2).getText() + "\n";
-    this.authors = table.getRow(3).getText();
-    this.features = table.getRow(4).getText();
-    this.voice = table.getRow(5).getText();
-    this.telegramVideo = table.getRow(6).getText();
-    this.webVideo = table.getRow(7).getText();
-    this.chords = table.getRow(8).getText();
-    this.tableNumber = tableNumber;
+Будь осознанным и помни о здравом смысле. 
+С 🧡 песенная служба.`;
 
-    this.authors = this.authors == "" ? "Авторы: неизвестны\n" : "Авторы: " + this.authors + "\n";
-    this.features = this.features == "" ? "" : "Особенности: " + this.features + "\n";
-  }
-}
+// URL картинки для правил орлятского круга (изображение круга сидящих у костра)
+const circleRulesImageUrl = 'https://i.ibb.co/xGCyZYW/orlcircle.jpg';
 
-// Класс для представления боя/перебора
-class StrummingPattern {
-  constructor(table, tableNumber) {
-    this.title = "Название: " + table.getRow(0).getText() + "\n";
-    this.features = table.getRow(1).getText();
-    this.photo = table.getRow(2).getText();
-    this.voice = table.getRow(3).getText();
-    this.telegramVideo = table.getRow(4).getText();
-    this.webVideo = table.getRow(5).getText();
-    this.tableNumber = tableNumber;
-
-    this.features = this.features == "" ? "" : "Особенности: " + this.features + "\n";
-  }
-}
-
-// Команды бота
-const commands = {
-  "/start": commandStart,
-  "/anecdote": commandAnecdote,
-  "/help": commandHelp,
-  "/chords": commandChords,
-  "/source": commandSource,
-  "/list": commandList,
-  "/cancel": commandCancel,
-  "/status": commandStatus,
-  "/strumming": commandStrumming,
-  "/circlerules": commandCircleRules,
-  "/ping_gosha": commandPing,
-  "/talk": commandTalk
-};
-
-// Утилитарные функции
-function findWord(word, str) {
-  return str.split(' ').some(function(w) { return w === word; }); //regexp doesn't work on russian characters. Too bad!
-}
-
-function normalizeString(str) {
-  str = str.toLowerCase();
-  str = str.replace(/\.|,|:|;|!|\?|"|/gm, "");
-  str = str.replace(/ë|ё/gm, "е"); //these are two different characters!
-  return str;
-}
-
-// Методы поиска песен
-function findChordsByAuthor(author) {
-  const foundSongs = [];
-  author = normalizeString(author);
+// Вспомогательная функция для отправки сообщений
+async function sendMessage(chatId, text, options = {}) {
+  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: options.parse_mode || 'HTML',
+    ...options
+  };
   
-  for (let i = 0; i < chords.length; i++) {
-    let authors = chords[i].getRow(3).getText();
-    authors = normalizeString(authors);
-    if (authors.includes(author)) {
-      const song = new Song(chords[i], i);
-      foundSongs.push(song);
-    }
-  }
-  
-  if (foundSongs.length > 0) {
-    return foundSongs;
-  } else {
-    return null;
-  }
-}
-
-function findChordsByTitle(title) {
-  const foundSongs = [];
-  title = normalizeString(title);
-  
-  for (let i = 0; i < chords.length; i++) {
-    let titles = chords[i].getRow(0).getText();
-    titles = normalizeString(titles);
-    if (titles.includes(title)) {
-      const song = new Song(chords[i], i);
-      foundSongs.push(song);
-    }
-  }
-  
-  if (foundSongs.length > 0) {
-    return foundSongs;
-  } else {
-    return null;
-  }
-}
-
-function findChordsByLine(line) {
-  const foundSongs = [];
-  line = normalizeString(line);
-  
-  for (let i = 0; i < chords.length; i++) {
-    let lines = chords[i].getRow(8).getText();
-    lines = normalizeString(lines);
-    if (lines.includes(line)) {
-      const song = new Song(chords[i], i);
-      foundSongs.push(song);
-    }
-  }
-  
-  if (foundSongs.length > 0) {
-    return foundSongs;
-  } else {
-    return null;
-  }
-}
-
-// Рандомные функции
-function randomInRange(min, max) {
-  return Math.floor(Math.random() * (max - min + 1) + min);
-}
-
-function getRandomTable(tables) {
-  const random = randomInRange(1, tables.length) - 1;
-  return tables[random];
-}
-
-// Функции отправки сообщений через Telegram API
-async function sendMessage(text, chat_id, keyBoard = null) {
   try {
-    const data = {
-      chat_id: String(chat_id),
-      text: text,
-      parse_mode: "HTML"
-    };
-
-    if (keyBoard) {
-      data.reply_markup = JSON.stringify(keyBoard);
-    }
-
-    const response = await axios.post(`${apiUrl}/sendMessage`, data);
+    const response = await axios.post(url, payload);
     return response.data;
   } catch (error) {
     console.error('Error sending message:', error);
-    return { ok: false, error: error.message };
+    return null;
   }
 }
 
-async function sendPhoto(file_id, chat_id) {
+// Отправка фото с подписью
+async function sendPhoto(chatId, photoUrl, caption, options = {}) {
+  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
+  const payload = {
+    chat_id: chatId,
+    photo: photoUrl,
+    caption: caption,
+    parse_mode: options.parse_mode || 'HTML',
+    ...options
+  };
+  
   try {
-    const data = {
-      chat_id: String(chat_id),
-      photo: String(file_id)
-    };
-
-    const response = await axios.post(`${apiUrl}/sendPhoto`, data);
+    const response = await axios.post(url, payload);
     return response.data;
   } catch (error) {
     console.error('Error sending photo:', error);
-    return { ok: false, error: error.message };
+    return null;
   }
 }
 
-async function sendVoice(file_id, chat_id) {
-  try {
-    const data = {
-      chat_id: String(chat_id),
-      voice: String(file_id)
-    };
+// Поиск песни по названию или автору
+function findSong(query) {
+  query = query.toLowerCase();
+  
+  return songbook.filter(song => {
+    return song.title.toLowerCase().includes(query) || 
+           (song.author && song.author.toLowerCase().includes(query)) ||
+           song.lyrics.toLowerCase().includes(query);
+  });
+}
 
-    const response = await axios.post(`${apiUrl}/sendVoice`, data);
-    return response.data;
-  } catch (error) {
-    console.error('Error sending voice:', error);
-    return { ok: false, error: error.message };
+// Форматирование песни для вывода
+function formatSong(song) {
+  let formattedSong = `<b>${song.title}</b>`;
+  
+  if (song.author) {
+    formattedSong += `\n<i>Автор: ${song.author}</i>`;
+  }
+  
+  if (song.rhythm) {
+    formattedSong += `\n<i>Ритм: ${song.rhythm}</i>`;
+  }
+  
+  if (song.notes) {
+    formattedSong += `\n<i>Примечание: ${song.notes}</i>`;
+  }
+  
+  formattedSong += `\n\n<pre>${song.lyrics}</pre>`;
+  
+  // Добавление ссылки на исходный документ
+  formattedSong += `\n\n<a href="${SONGBOOK_URL}">Открыть полный аккордник</a>`;
+  
+  return formattedSong;
+}
+
+// Получение случайной песни, которую давно не пели
+function getRandomUnusedSong() {
+  // Сортируем песни по времени последнего запроса (сначала те, которые давно не использовались)
+  const sortedSongs = [...songbook].sort((a, b) => {
+    const timeA = lastSongRequests[a.title] || 0;
+    const timeB = lastSongRequests[b.title] || 0;
+    return timeA - timeB;
+  });
+  
+  // Берем первую треть списка (самые редко используемые)
+  const unusedSongs = sortedSongs.slice(0, Math.max(1, Math.floor(sortedSongs.length / 3)));
+  
+  // Выбираем случайную песню из этого списка
+  const randomIndex = Math.floor(Math.random() * unusedSongs.length);
+  const song = unusedSongs[randomIndex];
+  
+  // Обновляем время последнего запроса для этой песни
+  lastSongRequests[song.title] = Date.now();
+  
+  return song;
+}
+
+// Получение статистики запросов песен
+function getSongsStatistics() {
+  const songEntries = Object.entries(songsStats).sort((a, b) => b[1] - a[1]);
+  
+  if (songEntries.length === 0) {
+    return "Статистика пока не собрана. Используйте команду /chords для поиска песен.";
+  }
+  
+  let statsMessage = "<b>Статистика запросов песен:</b>\n\n";
+  
+  songEntries.forEach(([title, count], index) => {
+    statsMessage += `${index + 1}. ${title}: ${count} ${count === 1 ? 'запрос' : 'запросов'}\n`;
+  });
+  
+  return statsMessage;
+}
+
+// Получение списка всех песен
+function getSongsList() {
+  let listMessage = "<b>Список песен в аккорднике:</b>\n\n";
+  
+  songbook.forEach((song, index) => {
+    listMessage += `${index + 1}. ${song.title}`;
+    if (song.author) {
+      listMessage += ` - ${song.author}`;
+    }
+    listMessage += '\n';
+  });
+  
+  return listMessage;
+}
+
+// Обработка команд
+async function handleCommand(message) {
+  const chatId = message.chat.id;
+  const text = message.text;
+  
+  // Извлечение команды и аргументов
+  const [command, ...args] = text.split(' ');
+  const query = args.join(' ');
+  
+  switch(command) {
+    case '/start':
+      await sendMessage(chatId, `Привет! Я Гоша, бот-помощник с аккордами и песнями. 
+      
+Используй команду /help, чтобы узнать, что я умею.`);
+      break;
+      
+    case '/help':
+      await sendMessage(chatId, `<b>Доступные команды:</b>
+
+/chords [запрос] - поиск песни в аккорднике
+/list - список всех песен
+/circlerules - правила орлятского круга
+/status - статистика запросов песен
+/random - получить случайную песню, которую давно не пели
+
+Чтобы найти песню, используйте команду /chords и часть названия или автора, например:
+/chords атланты
+/chords визбор
+/chords перевал`);
+      break;
+      
+    case '/chords':
+      if (!query) {
+        await sendMessage(chatId, "Пожалуйста, укажите название песни или автора после команды /chords");
+        return;
+      }
+      
+      const songs = findSong(query);
+      
+      if (songs.length === 0) {
+        await sendMessage(chatId, `По запросу "${query}" ничего не найдено. Попробуйте другой запрос или используйте команду /list для списка всех песен.`);
+        return;
+      }
+      
+      if (songs.length === 1) {
+        // Обновляем статистику
+        songsStats[songs[0].title] = (songsStats[songs[0].title] || 0) + 1;
+        lastSongRequests[songs[0].title] = Date.now();
+        
+        await sendMessage(chatId, formatSong(songs[0]));
+      } else if (songs.length <= 5) {
+        let songButtons = songs.map(song => [{
+          text: song.title + (song.author ? ` (${song.author})` : ''),
+          callback_data: `song:${song.title}`
+        }]);
+        
+        await sendMessage(chatId, `Найдено ${songs.length} песен по запросу "${query}". Выберите песню:`, {
+          reply_markup: JSON.stringify({
+            inline_keyboard: songButtons
+          })
+        });
+      } else {
+        await sendMessage(chatId, `Найдено слишком много песен (${songs.length}). Пожалуйста, уточните запрос.`);
+      }
+      break;
+      
+    case '/circlerules':
+      // Отправляем фото с правилами и текст
+      await sendPhoto(chatId, circleRulesImageUrl, circleRules);
+      break;
+      
+    case '/status':
+      await sendMessage(chatId, getSongsStatistics());
+      break;
+      
+    case '/list':
+      await sendMessage(chatId, getSongsList());
+      break;
+      
+    case '/random':
+      const randomSong = getRandomUnusedSong();
+      await sendMessage(chatId, `Вот песня, которую давно не пели:\n\n${formatSong(randomSong)}`);
+      break;
+      
+    default:
+      // Неизвестная команда
+      break;
   }
 }
 
-async function sendVideo(file_id, chat_id) {
-  try {
-    const data = {
-      chat_id: String(chat_id),
-      video: String(file_id)
-    };
-
-    const response = await axios.post(`${apiUrl}/sendVideo`, data);
-    return response.data;
-  } catch (error) {
-    console.error('Error sending video:', error);
-    return { ok: false, error: error.message };
-  }
-}
-
-// Функции для отправки контента
-async function sendSong(song, chat_id) {
-  const textMessage = song.title + song.authors + song.rhytm + song.features + song.group;
-  await sendMessage(textMessage, chat_id);
+// Обработка callback-запросов (для инлайн-кнопок)
+async function handleCallback(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+  const data = callbackQuery.data;
   
-  if (song.voice !== "") {
-    await sendVoice(song.voice, chat_id);
-  }
-  
-  if (song.telegramVideo !== "") {
-    await sendVideo(song.telegramVideo, chat_id);
-  }
-  
-  if (song.webVideo !== "") {
-    await sendMessage(song.webVideo, chat_id);
-  }
-  
-  await sendMessage(song.chords, chat_id);
-}
-
-async function sendStrummingPattern(pattern, chat_id) {
-  const textMessage = pattern.title + pattern.features;
-  await sendMessage(textMessage, chat_id);
-  
-  if (pattern.photo !== "") {
-    await sendPhoto(pattern.photo, chat_id);
-  }
-  
-  if (pattern.voice !== "") {
-    await sendVoice(pattern.voice, chat_id);
-  }
-  
-  if (pattern.telegramVideo !== "") {
-    await sendVideo(pattern.telegramVideo, chat_id);
-  }
-  
-  if (pattern.webVideo !== "") {
-    await sendMessage(pattern.webVideo, chat_id);
-  }
-}
-
-async function sendRandomResponse(chat_id) {
-  const table = getRandomTable(responses);
-  const txt = table.getRow(0).getText();
-  await sendMessage(txt, chat_id);
-}
-
-// Команды бота
-async function commandStart(chat_id) {
-  await sendMessage("Ну привет", chat_id);
-}
-
-async function commandChords(chat_id) {
-  const keyboard = {
-    inline_keyboard: [
-      [{
-        text: "по автору",
-        callback_data: "author"
-      },
-      {
-        text: "по названию",
-        callback_data: "title"
-      }],
-      [{
-        text: "по тексту",
-        callback_data: "line"
-      }]
-    ],
-    resize_keyboard: true,
-    remove_keyboard: true
-  };
-  
-  await sendMessage("Как именно мне стоит искать песню?", chat_id, keyboard);
-}
-
-async function commandAnecdote(chat_id) {
-  const table = getRandomTable(anecdotes);
-  const anec = table.getRow(0).getText();
-  await sendMessage(anec, chat_id);
-}
-
-async function commandHelp(chat_id) {
-  await sendMessage("<b>Команды:</b>\n/list - скинуть аккордник со всеми песнями\n/chords - найти аккорды к песне по автору, названию или знакомой вам строчке. Если я найду больше, чем 1 (одну) песню, то предложу вам выбрать нужную\n/strumming - показать, как играется выбранный бой или перебор\n/circlerules - скинуть красивую фотографию с правилами орлятского круга\n/anecdote - рассказать анекдот, который может поднять вам настроение\n/talk - сказать что-нибудь\n/status - получить информацию о том, насколько я умный\n/help - помощь. Команда, которую вы только что использовали\n/ping_gosha - техническая команда, которая выведет id чата и JSON вашего сообщения\n/source - инструкции по получению исходного кода\n\n<b>Хотите добавить свой анекдот/реплику? Нашли ошибку или просто есть что сказать? Пишите </b>" + authorTelegram, chat_id);
-}
-
-async function commandCancel(chat_id) {
-  const keyboard = {
-    remove_keyboard: true
-  };
-  
-  await sendMessage("Отмена операции. Вжух-вжух", chat_id, keyboard);
-}
-
-async function commandSource(chat_id) {
-  await sendMessage("Пишите " + authorTelegram + "\nЯ написан на Node.js и размещен на Vercel", chat_id);
-}
-
-async function commandList(chat_id) {
-  await sendMessage("Список песен в аккорднике:\n1. Кино - Пачка сигарет\n2. ДДТ - Что такое осень", chat_id);
-}
-
-async function commandStatus(chat_id) {
-  const songsNumber = chords.length;
-  const anecdotesNumber = anecdotes.length;
-  const responsesNumber = responses.length;
-  const strummingNumber = strumming.length;
-  
-  await sendMessage("На данный момент я знаю:\n<b>Песен: </b>" + songsNumber + "\n<b>Анекдотов: </b>" + anecdotesNumber + "\n<b>Реплик: </b>" + responsesNumber + "\n<b>Боёв/переборов: </b>" + strummingNumber, chat_id);
-}
-
-async function commandStrumming(chat_id) {
-  const keyboard = {
-    inline_keyboard: [],
-    resize_keyboard: true
-  };
-  
-  for (let i = 0; i < strumming.length; i++) {
-    let row = [{
-      text: strumming[i].getRow(0).getText().replace(/(\r\n|\n|\r)/gm, ""),
-      callback_data: "requestStrumming_" + String(i)
-    }];
+  if (data.startsWith('song:')) {
+    const songTitle = data.substring(5);
+    const song = songbook.find(s => s.title === songTitle);
     
-    keyboard.inline_keyboard.push(row);
+    if (song) {
+      // Обновляем статистику
+      songsStats[song.title] = (songsStats[song.title] || 0) + 1;
+      lastSongRequests[song.title] = Date.now();
+      
+      await sendMessage(chatId, formatSong(song));
+    } else {
+      await sendMessage(chatId, `Песня "${songTitle}" не найдена.`);
+    }
   }
   
-  await sendMessage("Какой именно бой/перебор вас интересует?", chat_id, keyboard);
-}
-
-async function commandCircleRules(chat_id) {
-  await sendPhoto(circleRulesPhotoFileId, chat_id);
-}
-
-async function commandPing(chat_id, update) {
-  await sendMessage("Pong!\n" + chat_id, chat_id);
-  await sendMessage(JSON.stringify(update), chat_id);
-}
-
-async function commandTalk(chat_id) {
-  await sendRandomResponse(chat_id);
-}
-
-// Обработчик вебхука для Vercel
-module.exports = async (req, res) => {
-  // Обработка проверки webhook статуса
-  if (req.method === 'GET') {
-    return res.status(200).json({ ok: true, message: 'Webhook is working' });
-  }
-
-  // Обработка только POST запросов
-  if (req.method !== 'POST') {
-    return res.status(405).json({ ok: false, message: 'Method not allowed' });
-  }
-
+  // Уведомляем Telegram, что callback обработан
   try {
-    const update = req.body;
-    console.log('Received update:', JSON.stringify(update));
+    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
+      callback_query_id: callbackQuery.id
+    });
+  } catch (error) {
+    console.error('Error answering callback query:', error);
+  }
+}
 
-    // Обработка callback_query (нажатие на inline кнопки)
+// Обработка сообщений, не являющихся командами
+async function handleNonCommandMessage(message) {
+  const chatId = message.chat.id;
+  
+  // Проверяем тип сообщения
+  if (message.photo) {
+    // Если прислали фото
+    await sendMessage(chatId, "Спасибо за фото! Если хотите найти аккорды к песне, воспользуйтесь командой /chords [название песни]");
+  } else if (message.voice) {
+    // Если прислали голосовое сообщение
+    await sendMessage(chatId, "Вместо голосового лучше спойте песню вживую! Используйте /random, чтобы получить случайную песню");
+  } else if (message.video) {
+    // Если прислали видео
+    await sendMessage(chatId, "Интересное видео! Если вам нужны правила орлятского круга, используйте команду /circlerules");
+  } else if (message.audio || message.document) {
+    // Если прислали аудио или документ
+    await sendMessage(chatId, "Спасибо за файл! Если вам нужна конкретная песня, воспользуйтесь поиском через /chords [название песни]");
+  } else if (message.text) {
+    // Если прислали обычный текст (не команду)
+    
+    // Проверяем, может это запрос песни без команды
+    const songs = findSong(message.text);
+    
+    if (songs.length === 1) {
+      // Нашли точное совпадение
+      songsStats[songs[0].title] = (songsStats[songs[0].title] || 0) + 1;
+      lastSongRequests[songs[0].title] = Date.now();
+      
+      await sendMessage(chatId, formatSong(songs[0]));
+    } else if (songs.length > 1 && songs.length <= 5) {
+      // Нашли несколько совпадений
+      let songButtons = songs.map(song => [{
+        text: song.title + (song.author ? ` (${song.author})` : ''),
+        callback_data: `song:${song.title}`
+      }]);
+      
+      await sendMessage(chatId, `Нашел ${songs.length} песен по запросу "${message.text}". Выберите песню:`, {
+        reply_markup: JSON.stringify({
+          inline_keyboard: songButtons
+        })
+      });
+    } else {
+      // Отвечаем случайной фразой
+      const responses = [
+        "Я не совсем понял, что вы имеете в виду. Используйте /help, чтобы увидеть список команд.",
+        "Для поиска песни используйте команду /chords и часть названия или автора.",
+        "Хотите получить случайную песню? Используйте /random!",
+        "Если вам нужны правила орлятского круга, введите /circlerules",
+        "Чтобы увидеть список всех песен, введите /list"
+      ];
+      
+      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+      await sendMessage(chatId, randomResponse);
+    }
+  }
+}
+
+// Главная функция обработки запросов
+module.exports = async (req, res) => {
+  // Проверка метода запроса
+  if (req.method === 'GET') {
+    // Для GET-запросов отправляем простую страницу
+    res.status(200).send(`Bot ${BOT_NAME} is running!`);
+    return;
+  }
+  
+  // Для POST-запросов обрабатываем обновления от Telegram
+  if (req.method === 'POST') {
+    const update = req.body;
+    
     if (update.callback_query) {
-      const callback = update.callback_query;
-      const chat_id = callback.message.chat.id;
-      const data = callback.data;
-      
-      const forceReply = chat_id == callback.from.id ? { force_reply: true } : {};
-      
-      if (data === "author") {
-        await sendMessage("Введите фамилию/отчество автора в ответе на это сообщение", chat_id, forceReply);
-      } else if (data === "title") {
-        await sendMessage("Введите название песни в ответе на это сообщение", chat_id, forceReply);
-      } else if (data === "line") {
-        await sendMessage("Введите пару слов из песни в ответе на это сообщение", chat_id, forceReply);
-      } else if (data.includes("requestSong_")) {
-        const tableNumber = parseInt(data.replace("requestSong_", ""));
-        await sendSong(new Song(chords[tableNumber], tableNumber), chat_id);
-      } else if (data.includes("requestStrumming_")) {
-        const tableNumber = parseInt(data.replace("requestStrumming_", ""));
-        await sendStrummingPattern(new StrummingPattern(strumming[tableNumber], tableNumber), chat_id);
-      }
-    } 
-    // Обработка обычных сообщений
-    else if (update.message && !update.message.reply_to_message) {
-      const chat_id = update.message.chat.id;
-      const text = update.message.text;
-      
-      // Обработка медиа файлов
-      if (update.message.text === undefined && chat_id === update.message.from.id) {
-        if (update.message.photo) {
-          const fileId = update.message.photo[update.message.photo.length - 1].file_id;
-          await sendMessage("Я оцениваю это фото в: " + String(fileId), chat_id);
-        } else if (update.message.voice) {
-          const fileId = update.message.voice.file_id;
-          await sendMessage("Я оцениваю это голосовое сообщение в: " + String(fileId), chat_id);
-        } else if (update.message.video) {
-          const fileId = update.message.video.file_id;
-          await sendMessage("Я оцениваю это видео в: " + String(fileId), chat_id);
-        }
-      } 
-      // Обработка команд
-      else if (text && text.charAt(0) === "/") {
-        const commandText = text.replace(botTelegram, "").split(' ')[0];
-        
-        if (commandText in commands) {
-          await commands[commandText](chat_id, update);
-        }
-      } 
-      // Обработка обычных сообщений
-      else if (text && chat_id === update.message.from.id) {
-        let swearFound = false;
-        
-        // Проверка на ругательства
-        for (let i = 0; i < swears.length; i++) {
-          const swear = swears[i].getRow(0).getText();
-          const loweredText = text.toLowerCase();
-          
-          if (findWord(swear, loweredText)) {
-            swearFound = true;
-            break;
-          }
-        }
-        
-        if (!swearFound) {
-          await sendRandomResponse(chat_id);
-        } else {
-          await sendMessage("Хэй, поаккуратнее со словами :(", chat_id);
-        }
-      }
-    } 
-    // Обработка ответов на сообщения бота
-    else if (update.message && update.message.reply_to_message) {
-      const chat_id = update.message.chat.id;
-      const repliedMessage = update.message.reply_to_message;
-      
-      if ((repliedMessage.from.id == botId) && (repliedMessage.text.indexOf("Введите") === 0)) {
-        let result = null;
-        
-        if (repliedMessage.text === "Введите фамилию/отчество автора в ответе на это сообщение") {
-          await sendMessage("Ищу по автору...", chat_id);
-          result = findChordsByAuthor(update.message.text);
-        } else if (repliedMessage.text === "Введите название песни в ответе на это сообщение") {
-          await sendMessage("Ищу по названию...", chat_id);
-          result = findChordsByTitle(update.message.text);
-        } else if (repliedMessage.text === "Введите пару слов из песни в ответе на это сообщение") {
-          await sendMessage("Ищу по строчке...", chat_id);
-          result = findChordsByLine(update.message.text);
-        }
-        
-        if (result !== null) {
-          if (result.length > 1) {
-            const keyboard = {
-              inline_keyboard: [],
-              resize_keyboard: true
-            };
-            
-            for (let i = 0; i < result.length; i++) {
-              let row = [{
-                text: result[i].title.replace(/(\r\n|\n|\r|Название: )/gm, ""),
-                callback_data: "requestSong_" + String(result[i].tableNumber)
-              }];
-              
-              keyboard.inline_keyboard.push(row);
-            }
-            
-            await sendMessage("Я нашёл несколько песен. Какая конкретно вам нужна?", chat_id, keyboard);
-          } else {
-            await sendSong(result[0], chat_id);
-          }
-        } else {
-          await sendMessage("Ничего не найдено :(\n<b>Не отчаивайтесь!</b> Чем короче ваше сообщение, тем больше вероятность успешного поиска. Попробуйте написать одно слово или его часть. Регистр, пунктуация, различия между «е» и «ё» не учитываются", chat_id);
-        }
-      } else if (chat_id === update.message.from.id) {
-        await sendRandomResponse(chat_id);
+      // Обработка callback-запросов (кнопки)
+      await handleCallback(update.callback_query);
+    } else if (update.message) {
+      if (update.message.text && update.message.text.startsWith('/')) {
+        // Обработка команд (текст, начинающийся с /)
+        await handleCommand(update.message);
+      } else {
+        // Обработка обычных сообщений
+        await handleNonCommandMessage(update.message);
       }
     }
-
-    return res.status(200).json({ ok: true });
-  } catch (error) {
-    console.error('Error handling webhook:', error);
-    return res.status(500).json({ ok: false, error: error.message });
+    
+    // Отправляем успешный ответ
+    res.status(200).send('OK');
+    return;
   }
+  
+  // Для других методов запроса отправляем ошибку
+  res.status(405).send('Method Not Allowed');
 }; 
