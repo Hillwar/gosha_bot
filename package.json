@@ -1,0 +1,19 @@
+{
+  "name": "gosha-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for Gosha63_bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "vercel"
+  ],
+  "author": "Hleb66613",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.2"
+  }
+} 
