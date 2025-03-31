@@ -374,17 +374,7 @@ async function handleCommand(message) {
       
     case '/circlerules':
       try {
-        const rules = `Правила орлятского круга:
-1. Встаньте в круг, положите руки на плечи соседей
-2. Сделайте шаг в центр, чтобы плечи соприкасались
-3. Наклоните голову вправо, чтобы ухо касалось груди соседа
-4. Закройте глаза
-5. Слушайте песню и думайте о своих близких
-6. После песни сделайте шаг назад и откройте глаза
-7. Посмотрите друг другу в глаза
-8. Сделайте шаг в центр и обнимитесь`;
-
-        await sendPhoto(chatId, 'https://i.imgur.com/8JQZQZQ.jpg', rules);
+        await sendPhoto(chatId, circleRulesImageUrl, circleRules);
       } catch (error) {
         console.error('Error in /circlerules command:', error);
         await sendMessage(chatId, 'Извините, произошла ошибка при отправке правил. Попробуйте позже.');
