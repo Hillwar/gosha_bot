@@ -4,133 +4,100 @@ const googleDocsService = require('./googleDocsService');
 // Сервис для работы с песнями
 class SongService {
   constructor() {
+    this.credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+    this.googleDocs = new googleDocsService(this.credentials);
+    this.songs = [];
+    this.lastUpdate = 0;
+    this.cacheTimeout = config.CACHE_TIMEOUT;
     this.songsStats = {};
     this.lastSongRequests = {};
     this.cachedSongs = null;
     this.lastCacheUpdate = null;
-    this.cacheTimeout = config.CACHE_TIMEOUT;
   }
 
   // Получение всех песен с кэшированием
-  async getAllSongs() {
+  async getSongs() {
     const now = Date.now();
-    if (!this.cachedSongs || !this.lastCacheUpdate || (now - this.lastCacheUpdate > this.cacheTimeout)) {
-      console.log('Updating songs cache from Google Docs');
-      this.cachedSongs = await googleDocsService.parseSongs();
-      this.lastCacheUpdate = now;
+    if (now - this.lastUpdate > this.cacheTimeout || this.songs.length === 0) {
+      try {
+        this.songs = await this.googleDocs.parseSongs(this.googleDocs.fileId);
+        this.lastUpdate = now;
+      } catch (error) {
+        console.error('Error updating songs:', error);
+      }
     }
-    return this.cachedSongs;
+    return this.songs;
   }
 
   // Поиск песни по запросу
   async findSongs(query) {
-    if (!query || query.trim() === '') {
-      return [];
+    const songs = await this.getSongs();
+    const normalizedQuery = query.toLowerCase().trim();
+    
+    // Exact title match
+    const exactTitleMatches = songs.filter(song => 
+      song.title.toLowerCase() === normalizedQuery
+    );
+    if (exactTitleMatches.length > 0) {
+      return exactTitleMatches;
     }
 
-    query = query.toLowerCase().trim();
-    console.log(`Searching for songs with query: "${query}"`);
+    // Partial title match
+    const titleMatches = songs.filter(song => 
+      song.title.toLowerCase().includes(normalizedQuery)
+    );
+    if (titleMatches.length > 0) {
+      return titleMatches;
+    }
 
-    const songs = await this.getAllSongs();
-    const results = songs.filter(song => {
-      // Сначала проверяем точное совпадение заголовка
-      if (song.title.toLowerCase() === query) {
-        return true;
-      }
+    // Author match
+    const authorMatches = songs.filter(song => 
+      song.author.toLowerCase().includes(normalizedQuery)
+    );
+    if (authorMatches.length > 0) {
+      return authorMatches;
+    }
 
-      // Затем проверяем частичное совпадение заголовка
-      const titleMatch = song.title && song.title.toLowerCase().includes(query);
-      if (titleMatch) {
-        return true;
-      }
-
-      // Проверяем совпадение автора
-      const authorMatch = song.author && song.author.toLowerCase().includes(query);
-      if (authorMatch) {
-        return true;
-      }
-
-      // В последнюю очередь проверяем текст песни
-      const lyricsMatch = song.lyrics && song.lyrics.toLowerCase().includes(query);
-      return lyricsMatch;
-    });
-
-    // Сортируем результаты по релевантности
-    results.sort((a, b) => {
-      // Точное совпадение заголовка имеет наивысший приоритет
-      if (a.title.toLowerCase() === query) return -1;
-      if (b.title.toLowerCase() === query) return 1;
-
-      // Частичное совпадение заголовка имеет второй приоритет
-      const aTitle = a.title.toLowerCase().includes(query);
-      const bTitle = b.title.toLowerCase().includes(query);
-      if (aTitle && !bTitle) return -1;
-      if (!aTitle && bTitle) return 1;
-
-      // Совпадение автора имеет третий приоритет
-      const aAuthor = a.author && a.author.toLowerCase().includes(query);
-      const bAuthor = b.author && b.author.toLowerCase().includes(query);
-      if (aAuthor && !bAuthor) return -1;
-      if (!aAuthor && bAuthor) return 1;
-
-      // По умолчанию сортируем по алфавиту
-      return a.title.localeCompare(b.title);
-    });
-
-    console.log(`Found ${results.length} songs matching "${query}"`);
-    return results;
+    // Lyrics match
+    return songs.filter(song => 
+      song.lyrics.some(line => line.toLowerCase().includes(normalizedQuery))
+    );
   }
 
   // Форматирование песни для вывода
   formatSong(song) {
-    let formattedSong = `${song.title}\n`;
-    
+    let result = `<b>${song.title}</b>\n`;
     if (song.author) {
-      formattedSong += `Автор: ${song.author}\n`;
+      result += `Автор: ${song.author}\n`;
     }
-    
     if (song.rhythm) {
-      formattedSong += `Ритм: ${song.rhythm}\n`;
+      result += `Ритм: ${song.rhythm}\n`;
     }
-    
     if (song.notes) {
-      formattedSong += `Примечание: ${song.notes}\n`;
+      result += `Примечание: ${song.notes}\n`;
+    }
+    result += '\n';
+
+    // Combine chords and lyrics
+    const lines = [];
+    for (let i = 0; i < Math.max(song.chords.length, song.lyrics.length); i++) {
+      if (song.chords[i]) {
+        lines.push(`<code>${song.chords[i]}</code>`);
+      }
+      if (song.lyrics[i]) {
+        lines.push(song.lyrics[i]);
+      }
     }
     
-    formattedSong += '\n';
-
-    // Добавляем текст с аккордами
-    const lines = song.lyrics.split('\n');
-    const chordLines = song.chords || [];
-    let chordIndex = 0;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      // Если строка начинается с цифры и точки, это начало нового куплета
-      if (/^\d+\./.test(line)) {
-        formattedSong += '\n' + line + '\n';
-        continue;
-      }
-
-      // Если есть аккорды для этой строки
-      if (chordIndex < chordLines.length) {
-        formattedSong += chordLines[chordIndex] + '\n';
-        chordIndex++;
-      }
-
-      formattedSong += line + '\n';
-    }
+    result += lines.join('\n');
+    result += `\n\n<a href="${config.SONGBOOK_URL}">Открыть сборник</a>`;
     
-    formattedSong += '\n<a href="${config.SONGBOOK_URL}">Открыть полный аккордник</a>';
-    
-    return formattedSong;
+    return result;
   }
 
   // Получение случайной песни
   async getRandomSong() {
-    const songs = await this.getAllSongs();
+    const songs = await this.getSongs();
     const sortedSongs = [...songs].sort((a, b) => {
       const timeA = this.lastSongRequests[a.title] || 0;
       const timeB = this.lastSongRequests[b.title] || 0;
@@ -169,7 +136,7 @@ class SongService {
 
   // Получение списка всех песен
   async getSongsList() {
-    const songs = await this.getAllSongs();
+    const songs = await this.getSongs();
     let listMessage = "<b>Список песен в аккорднике:</b>\n\n";
     songs.forEach((song, index) => {
       listMessage += `${index + 1}. ${song.title}`;
