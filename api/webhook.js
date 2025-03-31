@@ -188,28 +188,26 @@ async function sendMessage(chatId, text, options = {}) {
 }
 
 // Отправка фото с подписью
-async function sendPhoto(chatId, photoUrl, caption, options = {}) {
-  console.log(`Sending photo to ${chatId}, URL: ${photoUrl}, Caption length: ${caption.length}`);
-  
+async function sendPhoto(chatId, photoUrl, caption = '') {
   try {
-    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
-    const payload = {
+    console.log(`Отправка фото в чат ${chatId}`);
+    console.log(`URL фото: ${photoUrl}`);
+    console.log(`Текст подписи: ${caption}`);
+    
+    const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
       chat_id: chatId,
       photo: photoUrl,
       caption: caption,
-      parse_mode: options.parse_mode || 'HTML',
-      ...options
-    };
+      parse_mode: 'HTML'
+    });
     
-    const response = await axios.post(url, payload);
-    console.log('Photo sent successfully:', response.data);
+    console.log('Фото успешно отправлено:', response.data);
     return response.data;
   } catch (error) {
-    console.error('Error sending photo:', error.response ? error.response.data : error.message);
-    
-    // Если не удалось отправить фото, отправляем хотя бы текст
-    await sendMessage(chatId, `Не удалось отправить изображение. Правила орлятского круга:\n\n${caption}`);
-    return null;
+    console.error('Ошибка при отправке фото:', error.response ? error.response.data : error.message);
+    // Если не удалось отправить фото, отправляем только текст
+    await sendMessage(chatId, caption);
+    throw error;
   }
 }
 
@@ -383,14 +381,28 @@ async function handleCommand(message) {
       break;
       
     case '/circlerules':
-      console.log(`Sending circle rules to ${chatId} with image: ${circleRulesImageUrl}`);
       try {
-        // Отправляем фото с полным текстом правил
-        await sendPhoto(chatId, circleRulesImageUrl, circleRules);
+        console.log('Обработка команды /circlerules');
+        const rulesText = `Правила орлятского круга:\n\n` +
+          `1. В орлятском круге все равны.\n` +
+          `2. В орлятском круге нет начала и нет конца.\n` +
+          `3. В орлятском круге все смотрят друг другу в глаза.\n` +
+          `4. В орлятском круге все держатся за руки.\n` +
+          `5. В орлятском круге все поют.\n` +
+          `6. В орлятском круге все танцуют.\n` +
+          `7. В орлятском круге все улыбаются.\n` +
+          `8. В орлятском круге все дружат.\n` +
+          `9. В орлятском круге все верят друг другу.\n` +
+          `10. В орлятском круге все любят друг друга.\n\n` +
+          `Помни: орлятский круг - это не просто круг, это состояние души!`;
+        
+        const photoUrl = 'https://gosha-bot.vercel.app/img/rules_img.jpeg';
+        console.log(`Попытка отправить фото с правилами. URL: ${photoUrl}`);
+        
+        await sendPhoto(chatId, photoUrl, rulesText);
       } catch (error) {
-        console.error('Error sending circle rules:', error);
-        // В случае ошибки отправляем только текст
-        await sendMessage(chatId, `Правила орлятского круга:\n\n${circleRules}`);
+        console.error('Ошибка при отправке правил орлятского круга:', error);
+        await sendMessage(chatId, 'Произошла ошибка при отправке правил орлятского круга. Пожалуйста, попробуйте позже.');
       }
       break;
       
