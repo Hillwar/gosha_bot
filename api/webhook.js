@@ -190,23 +190,15 @@ async function sendMessage(chatId, text, options = {}) {
 // Отправка фото с подписью
 async function sendPhoto(chatId, photoUrl, caption = '') {
   try {
-    console.log(`Отправка фото в чат ${chatId}`);
-    console.log(`URL фото: ${photoUrl}`);
-    console.log(`Текст подписи: ${caption}`);
-    
     const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
       chat_id: chatId,
       photo: photoUrl,
       caption: caption,
       parse_mode: 'HTML'
     });
-    
-    console.log('Фото успешно отправлено:', response.data);
     return response.data;
   } catch (error) {
-    console.error('Ошибка при отправке фото:', error.response ? error.response.data : error.message);
-    // Если не удалось отправить фото, отправляем только текст
-    await sendMessage(chatId, caption);
+    console.error('Error sending photo:', error.response?.data || error.message);
     throw error;
   }
 }
@@ -382,27 +374,20 @@ async function handleCommand(message) {
       
     case '/circlerules':
       try {
-        console.log('Обработка команды /circlerules');
-        const rulesText = `Правила орлятского круга:\n\n` +
-          `1. В орлятском круге все равны.\n` +
-          `2. В орлятском круге нет начала и нет конца.\n` +
-          `3. В орлятском круге все смотрят друг другу в глаза.\n` +
-          `4. В орлятском круге все держатся за руки.\n` +
-          `5. В орлятском круге все поют.\n` +
-          `6. В орлятском круге все танцуют.\n` +
-          `7. В орлятском круге все улыбаются.\n` +
-          `8. В орлятском круге все дружат.\n` +
-          `9. В орлятском круге все верят друг другу.\n` +
-          `10. В орлятском круге все любят друг друга.\n\n` +
-          `Помни: орлятский круг - это не просто круг, это состояние души!`;
-        
-        const photoUrl = 'https://gosha-bot.vercel.app/img/rules_img.jpeg';
-        console.log(`Попытка отправить фото с правилами. URL: ${photoUrl}`);
-        
-        await sendPhoto(chatId, photoUrl, rulesText);
+        const rules = `Правила орлятского круга:
+1. Встаньте в круг, положите руки на плечи соседей
+2. Сделайте шаг в центр, чтобы плечи соприкасались
+3. Наклоните голову вправо, чтобы ухо касалось груди соседа
+4. Закройте глаза
+5. Слушайте песню и думайте о своих близких
+6. После песни сделайте шаг назад и откройте глаза
+7. Посмотрите друг другу в глаза
+8. Сделайте шаг в центр и обнимитесь`;
+
+        await sendPhoto(chatId, 'https://i.imgur.com/8JQZQZQ.jpg', rules);
       } catch (error) {
-        console.error('Ошибка при отправке правил орлятского круга:', error);
-        await sendMessage(chatId, 'Произошла ошибка при отправке правил орлятского круга. Пожалуйста, попробуйте позже.');
+        console.error('Error in /circlerules command:', error);
+        await sendMessage(chatId, 'Извините, произошла ошибка при отправке правил. Попробуйте позже.');
       }
       break;
       
