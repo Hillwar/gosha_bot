@@ -41,15 +41,14 @@ class GoogleDocsService {
       
       let songs = [];
       let currentPage = [];
-      let pageStartIndex = 0;
 
       // Проходим по всем элементам документа
       for (let i = 0; i < content.length; i++) {
         const element = content[i];
 
         // Если встретили разрыв страницы или это последний элемент
-        if (element.pageBreak || i === content.length - 1) {
-          // Добавляем последний элемент текущей страницы, если это конец документа
+        if ((element.pageBreak || i === content.length - 1) && currentPage.length > 0) {
+          // Если это последний элемент и это не разрыв страницы, добавляем его
           if (i === content.length - 1 && element.paragraph) {
             currentPage.push(element);
           }
@@ -62,14 +61,12 @@ class GoogleDocsService {
 
           // Начинаем новую страницу
           currentPage = [];
-          continue;
-        }
-
-        if (element.paragraph) {
+        } else if (element.paragraph) {
           currentPage.push(element);
         }
       }
 
+      console.log(`Parsed ${songs.length} songs from document`);
       return songs;
     } catch (error) {
       console.error('Error parsing songs:', error);
@@ -85,11 +82,7 @@ class GoogleDocsService {
     let contentStartIndex = 0;
 
     for (let i = 0; i < pageElements.length; i++) {
-      const text = pageElements[i].paragraph.elements
-        .map(e => e.textRun?.content || '')
-        .join('')
-        .trim();
-
+      const text = this.getElementText(pageElements[i]);
       if (text) {
         title = text;
         contentStartIndex = i + 1;
@@ -102,20 +95,24 @@ class GoogleDocsService {
     // Собираем весь остальной контент страницы
     let content = [];
     for (let i = contentStartIndex; i < pageElements.length; i++) {
-      const text = pageElements[i].paragraph.elements
-        .map(e => e.textRun?.content || '')
-        .join('')
-        .trim();
-
+      const text = this.getElementText(pageElements[i]);
       if (text) {
         content.push(text);
       }
     }
 
     return {
-      title,
+      title: title.trim(),
       content: content.join('\n')
     };
+  }
+
+  getElementText(element) {
+    if (!element.paragraph || !element.paragraph.elements) return '';
+    return element.paragraph.elements
+      .map(e => e.textRun?.content || '')
+      .join('')
+      .trim();
   }
 }
 

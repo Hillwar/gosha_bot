@@ -204,33 +204,36 @@ class CommandHandler {
       } else if (message.audio || message.document) {
         await telegramService.sendMessage(chatId, "Спасибо за файл! Если вам нужна конкретная песня, воспользуйтесь поиском через /chords [название песни]");
       } else if (message.text) {
-        const songs = await songService.findSongs(message.text);
+        // Ищем и в названиях, и в тексте
+        const titleMatches = await songService.findSongsByTitle(message.text);
+        const contentMatches = await songService.findSongsByContent(message.text);
         
-        if (songs.length === 1) {
-          songService.updateStats(songs[0].title);
-          await telegramService.sendMessage(chatId, songService.formatSong(songs[0]));
-        } else if (songs.length > 1 && songs.length <= config.MAX_SEARCH_RESULTS) {
-          let songButtons = songs.map(song => [{
-            text: song.title + (song.author ? ` (${song.author})` : ''),
-            callback_data: `song:${song.title}`
+        // Убираем дубликаты
+        const allMatches = [...new Set([...titleMatches, ...contentMatches])];
+        
+        if (allMatches.length === 0) {
+          await telegramService.sendMessage(
+            chatId,
+            'Ничего не найдено. Используйте /chords для поиска песни или /list для просмотра всех песен.'
+          );
+        } else if (allMatches.length === 1) {
+          const formattedSong = songService.formatSong(allMatches[0]);
+          await this.sendLongMessage(chatId, formattedSong);
+        } else {
+          let keyboard = allMatches.slice(0, config.MAX_SEARCH_RESULTS).map((song, index) => [{
+            text: song.title,
+            callback_data: `song:${index}`
           }]);
           
-          await telegramService.sendMessage(chatId, `Нашел ${songs.length} песен по запросу "${message.text}". Выберите песню:`, {
-            reply_markup: JSON.stringify({
-              inline_keyboard: songButtons
-            })
-          });
-        } else {
-          const responses = [
-            "Я не совсем понял, что вы имеете в виду. Используйте /help, чтобы увидеть список команд.",
-            "Для поиска песни используйте команду /chords и часть названия или автора.",
-            "Хотите получить случайную песню? Используйте /random!",
-            "Если вам нужны правила орлятского круга, введите /circlerules",
-            "Чтобы увидеть список всех песен, введите /list"
-          ];
-          
-          const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-          await telegramService.sendMessage(chatId, randomResponse);
+          await telegramService.sendMessage(
+            chatId, 
+            `Найдено ${allMatches.length} песен. Выберите песню:`,
+            {
+              reply_markup: JSON.stringify({
+                inline_keyboard: keyboard
+              })
+            }
+          );
         }
       }
     } catch (error) {
