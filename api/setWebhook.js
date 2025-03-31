@@ -1,20 +1,17 @@
 const axios = require('axios');
-
-// Токен бота и URL вебхука
-const BOT_TOKEN = '7746110687:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs';
-const WEBHOOK_URL = 'https://gosha-bot.vercel.app/api/webhook';
+const config = require('./config');
 
 // Функция для установки вебхука
 module.exports = async (req, res) => {
   try {
     // Устанавливаем вебхук
-    const response = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=${WEBHOOK_URL}`);
+    const response = await axios.get(`https://api.telegram.org/bot${config.BOT_TOKEN}/setWebhook?url=${config.WEBHOOK_URL}`);
     
     // Возвращаем ответ
     res.status(200).json({
       success: true,
       result: response.data,
-      message: `Webhook set to ${WEBHOOK_URL}`
+      message: `Webhook set to ${config.WEBHOOK_URL}`
     });
   } catch (error) {
     // В случае ошибки

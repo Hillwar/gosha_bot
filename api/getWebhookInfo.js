@@ -1,13 +1,11 @@
 const axios = require('axios');
-
-// Токен бота
-const BOT_TOKEN = '7746110687:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs';
+const config = require('./config');
 
 // Функция для получения информации о вебхуке
 module.exports = async (req, res) => {
   try {
     // Запрашиваем информацию о вебхуке
-    const response = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo`);
+    const response = await axios.get(`https://api.telegram.org/bot${config.BOT_TOKEN}/getWebhookInfo`);
     
     // Возвращаем ответ
     res.status(200).json({

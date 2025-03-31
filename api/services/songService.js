@@ -8,7 +8,7 @@ class SongService {
     this.lastSongRequests = {};
     this.cachedSongs = null;
     this.lastCacheUpdate = null;
-    this.cacheTimeout = 5 * 60 * 1000; // 5 минут
+    this.cacheTimeout = config.CACHE_TIMEOUT;
   }
 
   // Получение всех песен с кэшированием
@@ -51,15 +51,14 @@ class SongService {
       formattedSong += `\n<i>Автор: ${song.author}</i>`;
     }
     
-    if (song.rhythm) {
-      formattedSong += `\n<i>Ритм: ${song.rhythm}</i>`;
+    if (song.chords && song.chords.length > 0) {
+      formattedSong += `\n\n🎸 Аккорды:\n${song.chords.join('\n')}`;
     }
     
-    if (song.notes) {
-      formattedSong += `\n<i>Примечание: ${song.notes}</i>`;
+    if (song.lyrics) {
+      formattedSong += `\n\n📝 Текст:\n${song.lyrics}`;
     }
     
-    formattedSong += `\n\n<pre>${song.lyrics}</pre>`;
     formattedSong += `\n\n<a href="${config.SONGBOOK_URL}">Открыть полный аккордник</a>`;
     
     return formattedSong;
