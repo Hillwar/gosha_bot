@@ -166,7 +166,7 @@ const circleRules = `ПРАВИЛА ОРЛЯТСКОГО КРУГА
 С 🧡 песенная служба.`;
 
 // URL картинки для правил орлятского круга
-const circleRulesImageUrl = 'https://i.imgur.com/8JQZQZQ.jpg';
+const circleRulesImageUrl = '/img/rules_img.jpeg';
 
 // Вспомогательная функция для отправки сообщений
 async function sendMessage(chatId, text, options = {}) {
