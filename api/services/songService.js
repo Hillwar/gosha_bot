@@ -97,10 +97,18 @@ class SongService {
   // Получение списка всех песен
   async getSongsList() {
     const songs = await this.getSongs();
+    console.log(`Formatting list of ${songs.length} songs`);
+    
+    if (songs.length === 0) {
+      return "В сборнике пока нет песен. Попробуйте обновить позже.";
+    }
+
     let listMessage = "<b>Список песен в сборнике:</b>\n\n";
     songs.forEach((song, index) => {
+      console.log(`Adding song ${index + 1}: ${song.title}`);
       listMessage += `${index + 1}. ${song.title}\n`;
     });
+
     return listMessage;
   }
 }

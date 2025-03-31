@@ -173,10 +173,28 @@ class CommandHandler {
         );
       } else if (data.startsWith('song:')) {
         const index = parseInt(data.split(':')[1]);
+        // Получаем сохраненные результаты поиска из сообщения
+        const messageText = callbackQuery.message.text;
         const songs = await songService.getSongs();
-        if (index >= 0 && index < songs.length) {
-          const formattedSong = songService.formatSong(songs[index]);
+        const songTitles = messageText.split('\n').slice(1, -2); // Пропускаем первую и последние две строки
+        
+        // Находим выбранную песню по заголовку
+        const selectedTitle = songTitles[index]?.replace(/^\d+\.\s+/, '');
+        const selectedSong = songs.find(song => song.title === selectedTitle);
+
+        console.log('Selected song index:', index);
+        console.log('Song titles:', songTitles);
+        console.log('Selected title:', selectedTitle);
+        console.log('Found song:', selectedSong?.title);
+
+        if (selectedSong) {
+          const formattedSong = songService.formatSong(selectedSong);
           await this.sendLongMessage(chatId, formattedSong);
+        } else {
+          await telegramService.sendMessage(
+            chatId,
+            'Извините, не удалось найти выбранную песню. Попробуйте повторить поиск.'
+          );
         }
       }
 

@@ -36,27 +36,35 @@ class GoogleDocsService {
 
   async parseSongs(documentId) {
     try {
+      console.log('Starting to parse document:', documentId);
       const document = await this.docs.documents.get({ documentId });
-      const content = document.data.body.content;
+      console.log('Document loaded, content length:', document.data.body.content.length);
       
       let songs = [];
       let currentPage = [];
+      let pageCount = 0;
 
       // Проходим по всем элементам документа
-      for (let i = 0; i < content.length; i++) {
-        const element = content[i];
+      for (let i = 0; i < document.data.body.content.length; i++) {
+        const element = document.data.body.content[i];
 
         // Если встретили разрыв страницы или это последний элемент
-        if ((element.pageBreak || i === content.length - 1) && currentPage.length > 0) {
+        if ((element.pageBreak || i === document.data.body.content.length - 1) && currentPage.length > 0) {
+          pageCount++;
+          console.log(`Processing page ${pageCount}`);
+          
           // Если это последний элемент и это не разрыв страницы, добавляем его
-          if (i === content.length - 1 && element.paragraph) {
+          if (i === document.data.body.content.length - 1 && element.paragraph) {
             currentPage.push(element);
           }
 
           // Обрабатываем текущую страницу
           const song = this.parseSongFromPage(currentPage);
           if (song) {
+            console.log(`Found song: "${song.title}" (content length: ${song.content.length})`);
             songs.push(song);
+          } else {
+            console.log('No song found on this page');
           }
 
           // Начинаем новую страницу
@@ -66,7 +74,7 @@ class GoogleDocsService {
         }
       }
 
-      console.log(`Parsed ${songs.length} songs from document`);
+      console.log(`Parsed ${songs.length} songs from ${pageCount} pages`);
       return songs;
     } catch (error) {
       console.error('Error parsing songs:', error);
