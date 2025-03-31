@@ -166,7 +166,7 @@ const circleRules = `ПРАВИЛА ОРЛЯТСКОГО КРУГА
 С 🧡 песенная служба.`;
 
 // URL картинки для правил орлятского круга
-const circleRulesImageUrl = 'https://raw.githubusercontent.com/Hillwar/gosha_bot/main/public/img/rules_img.jpeg';
+const circleRulesImageUrl = 'https://i.imgur.com/8JQZQZQ.jpg';
 
 // Вспомогательная функция для отправки сообщений
 async function sendMessage(chatId, text, options = {}) {
@@ -190,12 +190,18 @@ async function sendMessage(chatId, text, options = {}) {
 // Отправка фото с подписью
 async function sendPhoto(chatId, photoUrl, caption = '') {
   try {
-    const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
-      chat_id: chatId,
-      photo: circleRulesImageUrl,
-      caption: caption,
-      parse_mode: 'HTML'
+    console.log('Sending photo with URL:', circleRulesImageUrl);
+    const response = await axios({
+      method: 'post',
+      url: `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`,
+      data: {
+        chat_id: chatId,
+        photo: circleRulesImageUrl,
+        caption: caption,
+        parse_mode: 'HTML'
+      }
     });
+    console.log('Photo sent successfully:', response.data);
     return response.data;
   } catch (error) {
     console.error('Error sending photo:', error.response?.data || error.message);
