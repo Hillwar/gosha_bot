@@ -19,10 +19,14 @@ class CommandHandler {
   }
 
   // Обработка команд
-  async handleCommand(command, params, chatId) {
+  async handleCommand(message) {
+    const chatId = message.chat.id;
+    const [command, ...args] = message.text.split(' ');
+    const query = args.join(' ');
+
     const handler = this.commands[command];
     if (handler) {
-      await handler(params, chatId);
+      await handler(chatId, query);
     } else {
       await this.handleUnknownCommand(chatId);
     }
@@ -30,91 +34,77 @@ class CommandHandler {
 
   // Обработчики отдельных команд
   async handleStart(chatId) {
-    await telegramService.sendMessage(chatId, `Привет! Я Гоша, бот-помощник с аккордами и песнями. 
-    
-Используй команду /help, чтобы узнать, что я умею.`);
+    await telegramService.sendMessage(chatId, 
+      'Привет! Я помогу найти песни в сборнике. Используй /help для списка команд.'
+    );
   }
 
   async handleHelp(chatId) {
-    await telegramService.sendMessage(chatId, `<b>Доступные команды:</b>
+    await telegramService.sendMessage(chatId, 
+      `<b>Доступные команды:</b>
 
-/chords [запрос] - поиск песни в аккорднике
+/chords - поиск песни (по названию или тексту)
 /list - список всех песен
-/circlerules - правила орлятского круга
-/status - статистика запросов песен
-/random - получить случайную песню, которую давно не пели
+/random - случайная песня
 
-Чтобы найти песню, используйте команду /chords и часть названия или автора, например:
-/chords атланты
-/chords визбор
-/chords перевал`);
+Примеры использования:
+/chords - начать поиск песни
+/chords атланты - искать "атланты" в названиях и тексте`,
+      { parse_mode: 'HTML' }
+    );
   }
 
-  async handleChords(query, chatId) {
+  async handleChords(chatId, query) {
     if (!query) {
-      await telegramService.sendMessage(chatId, 'Пожалуйста, укажите название песни для поиска');
+      // Если нет запроса, предлагаем выбрать тип поиска
+      await telegramService.sendMessage(chatId, 
+        'Как будем искать песню?',
+        {
+          reply_markup: JSON.stringify({
+            inline_keyboard: [
+              [{ text: 'По названию', callback_data: 'search_type:title' }],
+              [{ text: 'По тексту', callback_data: 'search_type:content' }]
+            ]
+          })
+        }
+      );
       return;
     }
 
+    // Если есть запрос, ищем и в названиях, и в тексте
     try {
-      const songs = await songService.findSongs(query);
-      
-      if (songs.length === 0) {
+      const titleMatches = await songService.findSongsByTitle(query);
+      const contentMatches = await songService.findSongsByContent(query);
+
+      // Убираем дубликаты
+      const allMatches = [...new Set([...titleMatches, ...contentMatches])];
+
+      if (allMatches.length === 0) {
         await telegramService.sendMessage(
-          chatId, 
+          chatId,
           `Песня "${query}" не найдена. Попробуйте изменить запрос или посмотреть /list всех песен.`
         );
         return;
       }
 
-      if (songs.length === 1) {
-        const formattedSong = songService.formatSong(songs[0]);
-        // Split long messages if needed (Telegram's limit is 4096 characters)
-        const maxLength = 4000; // Leave some room for formatting
-        
-        if (formattedSong.length <= maxLength) {
-          await telegramService.sendMessage(chatId, formattedSong, { parse_mode: 'HTML' });
-        } else {
-          const parts = [];
-          let currentPart = '';
-          const lines = formattedSong.split('\n');
-          
-          for (const line of lines) {
-            if (currentPart.length + line.length + 1 > maxLength) {
-              parts.push(currentPart);
-              currentPart = line;
-            } else {
-              currentPart += (currentPart ? '\n' : '') + line;
-            }
-          }
-          if (currentPart) {
-            parts.push(currentPart);
-          }
-
-          // Send each part
-          for (let i = 0; i < parts.length; i++) {
-            const isLastPart = i === parts.length - 1;
-            let part = parts[i];
-            
-            // Add link only to the last part
-            if (isLastPart) {
-              part += `\n\n<a href="${config.SONGBOOK_URL}">Открыть сборник</a>`;
-            }
-            
-            await telegramService.sendMessage(chatId, part, { parse_mode: 'HTML' });
-          }
-        }
+      if (allMatches.length === 1) {
+        const formattedSong = songService.formatSong(allMatches[0]);
+        await this.sendLongMessage(chatId, formattedSong);
       } else {
-        let message = 'Найдено несколько песен:\n\n';
-        songs.forEach((song, index) => {
-          message += `${index + 1}. ${song.title}`;
-          if (song.author) {
-            message += ` (${song.author})`;
-          }
-          message += '\n';
+        let message = `Найдено ${allMatches.length} песен:\n\n`;
+        allMatches.forEach((song, index) => {
+          message += `${index + 1}. ${song.title}\n`;
         });
-        message += '\nУточните запрос, чтобы получить конкретную песню.';
-        await telegramService.sendMessage(chatId, message);
+        message += '\nВыберите песню:';
+
+        const keyboard = allMatches.map((song, index) => [{
+          text: `${index + 1}. ${song.title}`,
+          callback_data: `song:${index}`
+        }]);
+
+        await telegramService.sendMessage(chatId, message, {
+          reply_markup: JSON.stringify({ inline_keyboard: keyboard })
+        });
       }
     } catch (error) {
       console.error('Error handling chords command:', error);
@@ -145,20 +135,27 @@ class CommandHandler {
   async handleList(chatId) {
     try {
       const list = await songService.getSongsList();
-      await telegramService.sendMessage(chatId, list);
+      await telegramService.sendMessage(chatId, list, { parse_mode: 'HTML' });
     } catch (error) {
       console.error('Error getting songs list:', error);
-      await telegramService.sendMessage(chatId, "Произошла ошибка при получении списка песен. Пожалуйста, попробуйте позже.");
+      await telegramService.sendMessage(
+        chatId,
+        'Произошла ошибка при получении списка песен. Пожалуйста, попробуйте позже.'
+      );
     }
   }
 
   async handleRandom(chatId) {
     try {
-      const randomSong = await songService.getRandomSong();
-      await telegramService.sendMessage(chatId, `Вот песня, которую давно не пели:\n\n${songService.formatSong(randomSong)}`);
+      const song = await songService.getRandomSong();
+      const formattedSong = songService.formatSong(song);
+      await this.sendLongMessage(chatId, formattedSong);
     } catch (error) {
       console.error('Error getting random song:', error);
-      await telegramService.sendMessage(chatId, "Произошла ошибка при выборе случайной песни. Пожалуйста, попробуйте позже.");
+      await telegramService.sendMessage(
+        chatId,
+        'Произошла ошибка при выборе случайной песни. Пожалуйста, попробуйте позже.'
+      );
     }
   }
 
@@ -166,25 +163,30 @@ class CommandHandler {
   async handleCallback(callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
     const data = callbackQuery.data;
-    
+
     try {
-      if (data.startsWith('song:')) {
-        const songTitle = data.substring(5);
-        const songs = await songService.findSongs(songTitle);
-        const song = songs[0];
-        
-        if (song) {
-          songService.updateStats(song.title);
-          await telegramService.sendMessage(chatId, songService.formatSong(song));
-        } else {
-          await telegramService.sendMessage(chatId, `Песня "${songTitle}" не найдена.`);
+      if (data.startsWith('search_type:')) {
+        const searchType = data.split(':')[1];
+        await telegramService.sendMessage(
+          chatId,
+          `Введите ${searchType === 'title' ? 'название' : 'слова из текста'} песни:`
+        );
+      } else if (data.startsWith('song:')) {
+        const index = parseInt(data.split(':')[1]);
+        const songs = await songService.getSongs();
+        if (index >= 0 && index < songs.length) {
+          const formattedSong = songService.formatSong(songs[index]);
+          await this.sendLongMessage(chatId, formattedSong);
         }
       }
-      
+
       await telegramService.answerCallbackQuery(callbackQuery.id);
     } catch (error) {
       console.error('Error handling callback:', error);
-      await telegramService.sendMessage(chatId, "Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже.");
+      await telegramService.sendMessage(
+        chatId,
+        'Произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже.'
+      );
     }
   }
 
@@ -238,7 +240,48 @@ class CommandHandler {
   }
 
   async handleUnknownCommand(chatId) {
-    await telegramService.sendMessage(chatId, "Неизвестная команда. Пожалуйста, используйте /help для получения списка команд.");
+    await telegramService.sendMessage(
+      chatId,
+      'Неизвестная команда. Используйте /help для списка команд.'
+    );
+  }
+
+  async sendLongMessage(chatId, text) {
+    const maxLength = 4000; // Оставляем запас для форматирования
+    
+    if (text.length <= maxLength) {
+      await telegramService.sendMessage(chatId, text, { parse_mode: 'HTML' });
+      return;
+    }
+
+    const parts = [];
+    let currentPart = '';
+    const lines = text.split('\n');
+
+    for (const line of lines) {
+      if (currentPart.length + line.length + 1 > maxLength) {
+        parts.push(currentPart);
+        currentPart = line;
+      } else {
+        currentPart += (currentPart ? '\n' : '') + line;
+      }
+    }
+
+    if (currentPart) {
+      parts.push(currentPart);
+    }
+
+    // Отправляем каждую часть
+    for (let i = 0; i < parts.length; i++) {
+      const isLastPart = i === parts.length - 1;
+      let part = parts[i];
+      
+      if (isLastPart) {
+        part += `\n\n<a href="${config.SONGBOOK_URL}">Открыть сборник</a>`;
+      }
+      
+      await telegramService.sendMessage(chatId, part, { parse_mode: 'HTML' });
+    }
   }
 }
 

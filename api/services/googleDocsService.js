@@ -40,65 +40,34 @@ class GoogleDocsService {
       const content = document.data.body.content;
       
       let songs = [];
-      let currentSong = null;
-      let isInMetadata = false;
-      
-      for (const element of content) {
-        if (!element.paragraph) continue;
-        
-        const text = element.paragraph.elements
-          .map(e => e.textRun?.content || '')
-          .join('')
-          .trim();
-          
-        if (!text) continue;
+      let currentPage = [];
+      let pageStartIndex = 0;
 
-        // Check if this is a new song title
-        if (text.match(/^[А-Яа-яЁё\s]+$/)) {
-          if (currentSong) {
-            songs.push(currentSong);
+      // Проходим по всем элементам документа
+      for (let i = 0; i < content.length; i++) {
+        const element = content[i];
+
+        // Если встретили разрыв страницы или это последний элемент
+        if (element.pageBreak || i === content.length - 1) {
+          // Добавляем последний элемент текущей страницы, если это конец документа
+          if (i === content.length - 1 && element.paragraph) {
+            currentPage.push(element);
           }
-          
-          currentSong = {
-            title: text,
-            author: '',
-            rhythm: '',
-            notes: '',
-            chords: [],
-            lyrics: []
-          };
-          isInMetadata = true;
+
+          // Обрабатываем текущую страницу
+          const song = this.parseSongFromPage(currentPage);
+          if (song) {
+            songs.push(song);
+          }
+
+          // Начинаем новую страницу
+          currentPage = [];
           continue;
         }
 
-        if (!currentSong) continue;
-
-        // Parse metadata
-        if (isInMetadata) {
-          if (text.startsWith('Автор:')) {
-            currentSong.author = text.replace('Автор:', '').trim();
-          } else if (text.startsWith('Ритм:')) {
-            currentSong.rhythm = text.replace('Ритм:', '').trim();
-          } else if (text.startsWith('Примечание:')) {
-            currentSong.notes = text.replace('Примечание:', '').trim();
-          } else if (text.match(/^[A-H]m?7?|^[A-H]m?\(?7?\)?/)) {
-            isInMetadata = false;
-          }
+        if (element.paragraph) {
+          currentPage.push(element);
         }
-
-        // Parse chords and lyrics
-        if (!isInMetadata) {
-          if (text.match(/^[A-H]m?7?|^[A-H]m?\(?7?\)?/)) {
-            currentSong.chords.push(text);
-          } else {
-            currentSong.lyrics.push(text);
-          }
-        }
-      }
-
-      // Don't forget to add the last song
-      if (currentSong) {
-        songs.push(currentSong);
       }
 
       return songs;
@@ -106,6 +75,47 @@ class GoogleDocsService {
       console.error('Error parsing songs:', error);
       return [];
     }
+  }
+
+  parseSongFromPage(pageElements) {
+    if (!pageElements || pageElements.length === 0) return null;
+
+    // Получаем первую непустую строку как заголовок
+    let title = '';
+    let contentStartIndex = 0;
+
+    for (let i = 0; i < pageElements.length; i++) {
+      const text = pageElements[i].paragraph.elements
+        .map(e => e.textRun?.content || '')
+        .join('')
+        .trim();
+
+      if (text) {
+        title = text;
+        contentStartIndex = i + 1;
+        break;
+      }
+    }
+
+    if (!title) return null;
+
+    // Собираем весь остальной контент страницы
+    let content = [];
+    for (let i = contentStartIndex; i < pageElements.length; i++) {
+      const text = pageElements[i].paragraph.elements
+        .map(e => e.textRun?.content || '')
+        .join('')
+        .trim();
+
+      if (text) {
+        content.push(text);
+      }
+    }
+
+    return {
+      title,
+      content: content.join('\n')
+    };
   }
 }
 
