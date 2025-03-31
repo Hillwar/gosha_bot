@@ -33,10 +33,48 @@ class SongService {
 
     const songs = await this.getAllSongs();
     const results = songs.filter(song => {
+      // Сначала проверяем точное совпадение заголовка
+      if (song.title.toLowerCase() === query) {
+        return true;
+      }
+
+      // Затем проверяем частичное совпадение заголовка
       const titleMatch = song.title && song.title.toLowerCase().includes(query);
+      if (titleMatch) {
+        return true;
+      }
+
+      // Проверяем совпадение автора
       const authorMatch = song.author && song.author.toLowerCase().includes(query);
+      if (authorMatch) {
+        return true;
+      }
+
+      // В последнюю очередь проверяем текст песни
       const lyricsMatch = song.lyrics && song.lyrics.toLowerCase().includes(query);
-      return titleMatch || authorMatch || lyricsMatch;
+      return lyricsMatch;
+    });
+
+    // Сортируем результаты по релевантности
+    results.sort((a, b) => {
+      // Точное совпадение заголовка имеет наивысший приоритет
+      if (a.title.toLowerCase() === query) return -1;
+      if (b.title.toLowerCase() === query) return 1;
+
+      // Частичное совпадение заголовка имеет второй приоритет
+      const aTitle = a.title.toLowerCase().includes(query);
+      const bTitle = b.title.toLowerCase().includes(query);
+      if (aTitle && !bTitle) return -1;
+      if (!aTitle && bTitle) return 1;
+
+      // Совпадение автора имеет третий приоритет
+      const aAuthor = a.author && a.author.toLowerCase().includes(query);
+      const bAuthor = b.author && b.author.toLowerCase().includes(query);
+      if (aAuthor && !bAuthor) return -1;
+      if (!aAuthor && bAuthor) return 1;
+
+      // По умолчанию сортируем по алфавиту
+      return a.title.localeCompare(b.title);
     });
 
     console.log(`Found ${results.length} songs matching "${query}"`);

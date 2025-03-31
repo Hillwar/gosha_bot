@@ -44,83 +44,25 @@ class GoogleDocsService {
       });
 
       const content = doc.data.body.content;
-      let currentSong = null;
       const songs = [];
-      let isInSong = false;
-      let isInMetadata = false;
+      let currentSong = null;
+      let currentPage = [];
+      let pageStartIndex = 0;
 
+      // Проходим по всем элементам документа
       for (let i = 0; i < content.length; i++) {
         const element = content[i];
-        if (!element.paragraph) continue;
 
-        const text = element.paragraph.elements
-          .map(e => e.textRun?.content || '')
-          .join('')
-          .trim();
-
-        if (!text) continue;
-
-        // Проверяем, является ли текущий параграф заголовком песни
-        const isSongTitle = (
-          // Если это первая строка после пустой строки
-          (i > 0 && (!content[i-1].paragraph || !content[i-1].paragraph.elements[0]?.textRun?.content?.trim())) &&
-          // И следующая строка содержит "Слова" или "музыка" или "Автор" или "Ритм"
-          (i < content.length - 1 && content[i+1].paragraph && 
-           (content[i+1].paragraph.elements[0]?.textRun?.content || '').trim().match(/^(Слова|музыка|Автор|Ритм)/i))
-        );
-
-        if (isSongTitle) {
-          if (currentSong) {
-            songs.push(currentSong);
+        // Если встретили разрыв страницы или это последний элемент
+        if (element.pageBreak || i === content.length - 1) {
+          // Обрабатываем текущую страницу
+          const song = this.parseSongFromPage(content.slice(pageStartIndex, i));
+          if (song) {
+            songs.push(song);
           }
-          currentSong = {
-            title: text,
-            author: '',
-            rhythm: '',
-            notes: '',
-            lyrics: '',
-            chords: []
-          };
-          isInSong = true;
-          isInMetadata = true;
+          pageStartIndex = i + 1;
           continue;
         }
-
-        if (!isInSong) continue;
-
-        // Проверяем метаданные песни
-        if (isInMetadata) {
-          if (text.match(/^Автор:/i)) {
-            currentSong.author = text.replace(/^Автор:\s*/i, '');
-            continue;
-          }
-          if (text.match(/^Ритм:/i)) {
-            currentSong.rhythm = text.replace(/^Ритм:\s*/i, '');
-            continue;
-          }
-          if (text.match(/^Примечание:/i)) {
-            currentSong.notes = text.replace(/^Примечание:\s*/i, '');
-            continue;
-          }
-          // Если встретили строку с аккордами или номером куплета, значит метаданные закончились
-          if (text.match(/^([A-H]m?7?|[1-9]\.)/)) {
-            isInMetadata = false;
-          }
-        }
-
-        // Проверяем, является ли строка аккордами
-        if (text.match(/^[A-H]m?7?/)) {
-          currentSong.chords.push(text);
-          continue;
-        }
-
-        // Добавляем текст песни
-        currentSong.lyrics += text + '\n';
-      }
-
-      // Добавляем последнюю песню
-      if (currentSong) {
-        songs.push(currentSong);
       }
 
       return songs;
@@ -128,6 +70,72 @@ class GoogleDocsService {
       console.error('Error parsing songs:', error);
       throw error;
     }
+  }
+
+  parseSongFromPage(pageContent) {
+    let song = {
+      title: '',
+      author: '',
+      rhythm: '',
+      notes: '',
+      lyrics: '',
+      chords: []
+    };
+
+    let isInMetadata = true;
+    let hasContent = false;
+
+    for (let i = 0; i < pageContent.length; i++) {
+      const element = pageContent[i];
+      if (!element.paragraph) continue;
+
+      const text = element.paragraph.elements
+        .map(e => e.textRun?.content || '')
+        .join('')
+        .trim();
+
+      if (!text) continue;
+
+      hasContent = true;
+
+      // Первая непустая строка - заголовок
+      if (!song.title) {
+        song.title = text;
+        continue;
+      }
+
+      // Обрабатываем метаданные
+      if (isInMetadata) {
+        if (text.match(/^Автор:/i)) {
+          song.author = text.replace(/^Автор:\s*/i, '');
+          continue;
+        }
+        if (text.match(/^Ритм:/i)) {
+          song.rhythm = text.replace(/^Ритм:\s*/i, '');
+          continue;
+        }
+        if (text.match(/^Примечание:/i)) {
+          song.notes = text.replace(/^Примечание:\s*/i, '');
+          continue;
+        }
+        // Если встретили строку с аккордами или номером куплета, значит метаданные закончились
+        if (text.match(/^([A-H]m?7?|[1-9]\.)/)) {
+          isInMetadata = false;
+        }
+      }
+
+      // Проверяем, является ли строка аккордами
+      if (text.match(/^[A-H]m?7?/)) {
+        song.chords.push(text);
+        continue;
+      }
+
+      // Добавляем текст песни
+      song.lyrics += text + '\n';
+    }
+
+    // Возвращаем песню только если на странице был контент
+    return hasContent ? song : null;
   }
 }
 
