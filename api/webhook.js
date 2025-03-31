@@ -166,7 +166,7 @@ const circleRules = `ПРАВИЛА ОРЛЯТСКОГО КРУГА
 С 🧡 песенная служба.`;
 
 // URL картинки для правил орлятского круга
-const circleRulesImageUrl = 'https://gosha-bot.vercel.app/img/rules_img.jpeg';
+const circleRulesImageUrl = 'https://raw.githubusercontent.com/Hillwar/gosha_bot/main/public/img/rules_img.jpeg';
 
 // Вспомогательная функция для отправки сообщений
 async function sendMessage(chatId, text, options = {}) {
@@ -190,21 +190,11 @@ async function sendMessage(chatId, text, options = {}) {
 // Отправка фото с подписью
 async function sendPhoto(chatId, photoUrl, caption = '') {
   try {
-    const FormData = require('form-data');
-    const fs = require('fs');
-    const path = require('path');
-    
-    const form = new FormData();
-    form.append('chat_id', chatId);
-    form.append('caption', caption);
-    form.append('parse_mode', 'HTML');
-    
-    // Используем локальный путь к файлу
-    const photoPath = path.join(process.cwd(), 'public', 'img', 'rules_img.jpeg');
-    form.append('photo', fs.createReadStream(photoPath));
-    
-    const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, form, {
-      headers: form.getHeaders()
+    const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+      chat_id: chatId,
+      photo: circleRulesImageUrl,
+      caption: caption,
+      parse_mode: 'HTML'
     });
     return response.data;
   } catch (error) {
