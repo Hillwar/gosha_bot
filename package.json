@@ -8,8 +8,9 @@
     "deploy": "vercel deploy --prod"
   },
   "dependencies": {
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "form-data": "^4.0.2"
   },
   "author": "",
   "license": "MIT"
-} 
+}
