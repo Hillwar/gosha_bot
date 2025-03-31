@@ -6,7 +6,7 @@ module.exports = {
   WEBHOOK_URL: process.env.WEBHOOK_URL || 'https://gosha-bot.vercel.app/api/webhook',
   
   // Ссылки и ресурсы
-  SONGBOOK_URL: process.env.SONGBOOK_URL || 'https://docs.google.com/document/d/1e7t6SXSQKO9DMIMehiY_8NwHcQQQ1OVv',
+  SONGBOOK_URL: process.env.SONGBOOK_URL || 'https://docs.google.com/document/d/1e7t6SXSQKO9DMIMehiY_8NwHcQQQ1OVv/edit',
   CIRCLE_RULES_IMAGE: process.env.CIRCLE_RULES_IMAGE || 'https://i.imgur.com/8JQZQZQ.jpg',
   
   // Настройки сообщений

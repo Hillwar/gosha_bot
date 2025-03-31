@@ -13,10 +13,26 @@ class GoogleDocsService {
   // Извлекаем ID документа из URL
   extractDocumentId(url) {
     console.log('Extracting document ID from URL:', url);
-    const match = url.match(/[-\w]{25,}/);
-    const documentId = match ? match[0] : null;
-    console.log('Extracted document ID:', documentId);
-    return documentId;
+    
+    // Поддержка разных форматов URL Google Docs
+    const patterns = [
+      /\/document\/d\/([a-zA-Z0-9-_]+)/, // Стандартный формат
+      /\/document\/d\/([a-zA-Z0-9-_]+)\//, // С слешем в конце
+      /\/document\/d\/([a-zA-Z0-9-_]+)\/edit/, // С /edit в конце
+      /^([a-zA-Z0-9-_]+)$/ // Просто ID
+    ];
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match && match[1]) {
+        const documentId = match[1];
+        console.log('Extracted document ID:', documentId);
+        return documentId;
+      }
+    }
+
+    console.error('Could not extract document ID from URL:', url);
+    return null;
   }
 
   // Инициализация аутентификации
