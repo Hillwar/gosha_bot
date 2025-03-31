@@ -1,4 +1,6 @@
 const axios = require('axios');
+const commandHandler = require('./handlers/commandHandler');
+const config = require('./config');
 
 // Токен бота
 const BOT_TOKEN = '7746110687:AAElvNykURie6fU1kBiFGZ_c4co75n9qgRs';
@@ -311,203 +313,11 @@ function getSongsList() {
   return listMessage;
 }
 
-// Обработка команд
-async function handleCommand(message) {
-  const chatId = message.chat.id;
-  const text = message.text;
-  
-  console.log(`Handling command: ${text} from chat ${chatId}`);
-  
-  // Извлечение команды и аргументов
-  const [command, ...args] = text.split(' ');
-  const query = args.join(' ');
-  
-  switch(command) {
-    case '/start':
-      await sendMessage(chatId, `Привет! Я Гоша, бот-помощник с аккордами и песнями. 
-      
-Используй команду /help, чтобы узнать, что я умею.`);
-      break;
-      
-    case '/help':
-      await sendMessage(chatId, `<b>Доступные команды:</b>
-
-/chords [запрос] - поиск песни в аккорднике
-/list - список всех песен
-/circlerules - правила орлятского круга
-/status - статистика запросов песен
-/random - получить случайную песню, которую давно не пели
-
-Чтобы найти песню, используйте команду /chords и часть названия или автора, например:
-/chords атланты
-/chords визбор
-/chords перевал`);
-      break;
-      
-    case '/chords':
-      if (!query) {
-        await sendMessage(chatId, "Пожалуйста, укажите название песни или автора после команды /chords");
-        return;
-      }
-      
-      const songs = findSong(query);
-      
-      if (songs.length === 0) {
-        await sendMessage(chatId, `По запросу "${query}" ничего не найдено. Попробуйте другой запрос или используйте команду /list для списка всех песен.`);
-        return;
-      }
-      
-      if (songs.length === 1) {
-        // Обновляем статистику
-        songsStats[songs[0].title] = (songsStats[songs[0].title] || 0) + 1;
-        lastSongRequests[songs[0].title] = Date.now();
-        
-        await sendMessage(chatId, formatSong(songs[0]));
-      } else if (songs.length <= 5) {
-        let songButtons = songs.map(song => [{
-          text: song.title + (song.author ? ` (${song.author})` : ''),
-          callback_data: `song:${song.title}`
-        }]);
-        
-        await sendMessage(chatId, `Найдено ${songs.length} песен по запросу "${query}". Выберите песню:`, {
-          reply_markup: JSON.stringify({
-            inline_keyboard: songButtons
-          })
-        });
-      } else {
-        await sendMessage(chatId, `Найдено слишком много песен (${songs.length}). Пожалуйста, уточните запрос.`);
-      }
-      break;
-      
-    case '/circlerules':
-      try {
-        await sendPhoto(chatId, null, circleRules);
-      } catch (error) {
-        console.error('Error in /circlerules command:', error);
-        await sendMessage(chatId, 'Извините, произошла ошибка при отправке правил. Попробуйте позже.');
-      }
-      break;
-      
-    case '/rules_text':
-      // Отправляем только текст правил без изображения
-      await sendMessage(chatId, circleRules);
-      break;
-      
-    case '/status':
-      console.log(`Sending status to ${chatId}, stats entries: ${Object.keys(songsStats).length}`);
-      const statsMessage = getSongsStatistics();
-      await sendMessage(chatId, statsMessage);
-      break;
-      
-    case '/list':
-      await sendMessage(chatId, getSongsList());
-      break;
-      
-    case '/random':
-      const randomSong = getRandomUnusedSong();
-      await sendMessage(chatId, `Вот песня, которую давно не пели:\n\n${formatSong(randomSong)}`);
-      break;
-      
-    default:
-      // Неизвестная команда
-      break;
-  }
-}
-
-// Обработка callback-запросов (для инлайн-кнопок)
-async function handleCallback(callbackQuery) {
-  const chatId = callbackQuery.message.chat.id;
-  const messageId = callbackQuery.message.message_id;
-  const data = callbackQuery.data;
-  
-  if (data.startsWith('song:')) {
-    const songTitle = data.substring(5);
-    const song = songbook.find(s => s.title === songTitle);
-    
-    if (song) {
-      // Обновляем статистику
-      songsStats[song.title] = (songsStats[song.title] || 0) + 1;
-      lastSongRequests[song.title] = Date.now();
-      
-      await sendMessage(chatId, formatSong(song));
-    } else {
-      await sendMessage(chatId, `Песня "${songTitle}" не найдена.`);
-    }
-  }
-  
-  // Уведомляем Telegram, что callback обработан
-  try {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
-      callback_query_id: callbackQuery.id
-    });
-  } catch (error) {
-    console.error('Error answering callback query:', error);
-  }
-}
-
-// Обработка сообщений, не являющихся командами
-async function handleNonCommandMessage(message) {
-  const chatId = message.chat.id;
-  
-  // Проверяем тип сообщения
-  if (message.photo) {
-    // Если прислали фото
-    await sendMessage(chatId, "Спасибо за фото! Если хотите найти аккорды к песне, воспользуйтесь командой /chords [название песни]");
-  } else if (message.voice) {
-    // Если прислали голосовое сообщение
-    await sendMessage(chatId, "Вместо голосового лучше спойте песню вживую! Используйте /random, чтобы получить случайную песню");
-  } else if (message.video) {
-    // Если прислали видео
-    await sendMessage(chatId, "Интересное видео! Если вам нужны правила орлятского круга, используйте команду /circlerules");
-  } else if (message.audio || message.document) {
-    // Если прислали аудио или документ
-    await sendMessage(chatId, "Спасибо за файл! Если вам нужна конкретная песня, воспользуйтесь поиском через /chords [название песни]");
-  } else if (message.text) {
-    // Если прислали обычный текст (не команду)
-    
-    // Проверяем, может это запрос песни без команды
-    const songs = findSong(message.text);
-    
-    if (songs.length === 1) {
-      // Нашли точное совпадение
-      songsStats[songs[0].title] = (songsStats[songs[0].title] || 0) + 1;
-      lastSongRequests[songs[0].title] = Date.now();
-      
-      await sendMessage(chatId, formatSong(songs[0]));
-    } else if (songs.length > 1 && songs.length <= 5) {
-      // Нашли несколько совпадений
-      let songButtons = songs.map(song => [{
-        text: song.title + (song.author ? ` (${song.author})` : ''),
-        callback_data: `song:${song.title}`
-      }]);
-      
-      await sendMessage(chatId, `Нашел ${songs.length} песен по запросу "${message.text}". Выберите песню:`, {
-        reply_markup: JSON.stringify({
-          inline_keyboard: songButtons
-        })
-      });
-    } else {
-      // Отвечаем случайной фразой
-      const responses = [
-        "Я не совсем понял, что вы имеете в виду. Используйте /help, чтобы увидеть список команд.",
-        "Для поиска песни используйте команду /chords и часть названия или автора.",
-        "Хотите получить случайную песню? Используйте /random!",
-        "Если вам нужны правила орлятского круга, введите /circlerules",
-        "Чтобы увидеть список всех песен, введите /list"
-      ];
-      
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-      await sendMessage(chatId, randomResponse);
-    }
-  }
-}
-
 // Главная функция обработки запросов
 module.exports = async (req, res) => {
   // Проверка метода запроса
   if (req.method === 'GET') {
-    // Для GET-запросов отправляем простую страницу
-    res.status(200).send(`Bot ${BOT_NAME} is running!`);
+    res.status(200).send(`Bot ${config.BOT_NAME} is running!`);
     return;
   }
   
@@ -521,34 +331,29 @@ module.exports = async (req, res) => {
       if (update.callback_query) {
         // Обработка callback-запросов (кнопки)
         console.log('Processing callback query:', update.callback_query.data);
-        await handleCallback(update.callback_query);
+        await commandHandler.handleCallback(update.callback_query);
       } else if (update.message) {
         if (update.message.text && update.message.text.startsWith('/')) {
           // Обработка команд (текст, начинающийся с /)
           console.log('Processing command:', update.message.text);
-          await handleCommand(update.message);
+          await commandHandler.handleCommand(update.message);
         } else {
           // Обработка обычных сообщений
           console.log('Processing message:', update.message.text || 'non-text message');
-          await handleNonCommandMessage(update.message);
+          await commandHandler.handleMessage(update.message);
         }
       } else {
         console.log('Unknown update type:', update);
       }
       
-      // Отправляем успешный ответ
       res.status(200).send('OK');
     } catch (error) {
       console.error('Error processing update:', error);
-      
-      // Даже при ошибке отправляем успешный ответ Telegram,
-      // чтобы не получать повторные запросы с тем же обновлением
       res.status(200).send('Error processed');
     }
     
     return;
   }
   
-  // Для других методов запроса отправляем ошибку
   res.status(405).send('Method Not Allowed');
 }; 

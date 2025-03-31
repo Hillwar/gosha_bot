@@ -1,16 +1,15 @@
 {
   "name": "gosha-bot",
   "version": "1.0.0",
-  "description": "Telegram бот Гоша для поиска аккордов и песен",
+  "description": "Telegram bot for songs and chords",
   "main": "api/webhook.js",
   "scripts": {
-    "dev": "vercel dev",
+    "start": "vercel dev",
     "deploy": "vercel deploy --prod"
   },
   "dependencies": {
-    "axios": "^1.6.0",
-    "form-data": "^4.0.2"
+    "axios": "^1.6.8"
   },
   "author": "",
-  "license": "MIT"
+  "license": "ISC"
 }
