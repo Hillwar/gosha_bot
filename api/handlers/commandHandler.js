@@ -93,7 +93,39 @@ class CommandHandler {
       
       if (songs.length === 1) {
         songService.updateStats(songs[0].title);
-        await telegramService.sendMessage(chatId, songService.formatSong(songs[0]));
+        const formattedSong = songService.formatSong(songs[0]);
+        
+        // Разбиваем длинное сообщение на части, если оно превышает лимит Telegram
+        const maxLength = 4096;
+        if (formattedSong.length > maxLength) {
+          const parts = [];
+          let currentPart = '';
+          
+          formattedSong.split('\n').forEach(line => {
+            if ((currentPart + line + '\n').length > maxLength) {
+              parts.push(currentPart);
+              currentPart = line + '\n';
+            } else {
+              currentPart += line + '\n';
+            }
+          });
+          
+          if (currentPart) {
+            parts.push(currentPart);
+          }
+          
+          // Отправляем каждую часть отдельным сообщением
+          for (let i = 0; i < parts.length; i++) {
+            let part = parts[i];
+            // Добавляем ссылку на аккордник только в последнюю часть
+            if (i === parts.length - 1) {
+              part += `\n<a href="${config.SONGBOOK_URL}">Открыть полный аккордник</a>`;
+            }
+            await telegramService.sendMessage(chatId, part, { parse_mode: 'HTML' });
+          }
+        } else {
+          await telegramService.sendMessage(chatId, formattedSong, { parse_mode: 'HTML' });
+        }
       } else if (songs.length <= config.MAX_SEARCH_RESULTS) {
         let songButtons = songs.map(song => [{
           text: song.title + (song.author ? ` (${song.author})` : ''),

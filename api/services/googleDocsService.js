@@ -47,6 +47,7 @@ class GoogleDocsService {
       let currentSong = null;
       const songs = [];
       let isInSong = false;
+      let isInMetadata = false;
 
       for (let i = 0; i < content.length; i++) {
         const element = content[i];
@@ -63,9 +64,9 @@ class GoogleDocsService {
         const isSongTitle = (
           // Если это первая строка после пустой строки
           (i > 0 && (!content[i-1].paragraph || !content[i-1].paragraph.elements[0]?.textRun?.content?.trim())) &&
-          // И следующая строка содержит "Слова" или "музыка" или аккорды
+          // И следующая строка содержит "Слова" или "музыка" или "Автор" или "Ритм"
           (i < content.length - 1 && content[i+1].paragraph && 
-           (content[i+1].paragraph.elements[0]?.textRun?.content || '').trim().match(/^(Слова|музыка|[A-H]m?7?)/i))
+           (content[i+1].paragraph.elements[0]?.textRun?.content || '').trim().match(/^(Слова|музыка|Автор|Ритм)/i))
         );
 
         if (isSongTitle) {
@@ -75,19 +76,36 @@ class GoogleDocsService {
           currentSong = {
             title: text,
             author: '',
+            rhythm: '',
+            notes: '',
             lyrics: '',
             chords: []
           };
           isInSong = true;
+          isInMetadata = true;
           continue;
         }
 
         if (!isInSong) continue;
 
-        // Проверяем, является ли строка авторской информацией
-        if (text.match(/^(Слова|музыка|муз\.|сл\.)/i)) {
-          currentSong.author = text;
-          continue;
+        // Проверяем метаданные песни
+        if (isInMetadata) {
+          if (text.match(/^Автор:/i)) {
+            currentSong.author = text.replace(/^Автор:\s*/i, '');
+            continue;
+          }
+          if (text.match(/^Ритм:/i)) {
+            currentSong.rhythm = text.replace(/^Ритм:\s*/i, '');
+            continue;
+          }
+          if (text.match(/^Примечание:/i)) {
+            currentSong.notes = text.replace(/^Примечание:\s*/i, '');
+            continue;
+          }
+          // Если встретили строку с аккордами или номером куплета, значит метаданные закончились
+          if (text.match(/^([A-H]m?7?|[1-9]\.)/)) {
+            isInMetadata = false;
+          }
         }
 
         // Проверяем, является ли строка аккордами

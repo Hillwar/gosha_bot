@@ -45,21 +45,47 @@ class SongService {
 
   // Форматирование песни для вывода
   formatSong(song) {
-    let formattedSong = `<b>${song.title}</b>`;
+    let formattedSong = `${song.title}\n`;
     
     if (song.author) {
-      formattedSong += `\n<i>Автор: ${song.author}</i>`;
+      formattedSong += `Автор: ${song.author}\n`;
     }
     
-    if (song.chords && song.chords.length > 0) {
-      formattedSong += `\n\n🎸 Аккорды:\n${song.chords.join('\n')}`;
+    if (song.rhythm) {
+      formattedSong += `Ритм: ${song.rhythm}\n`;
     }
     
-    if (song.lyrics) {
-      formattedSong += `\n\n📝 Текст:\n${song.lyrics}`;
+    if (song.notes) {
+      formattedSong += `Примечание: ${song.notes}\n`;
     }
     
-    formattedSong += `\n\n<a href="${config.SONGBOOK_URL}">Открыть полный аккордник</a>`;
+    formattedSong += '\n';
+
+    // Добавляем текст с аккордами
+    const lines = song.lyrics.split('\n');
+    const chordLines = song.chords || [];
+    let chordIndex = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      // Если строка начинается с цифры и точки, это начало нового куплета
+      if (/^\d+\./.test(line)) {
+        formattedSong += '\n' + line + '\n';
+        continue;
+      }
+
+      // Если есть аккорды для этой строки
+      if (chordIndex < chordLines.length) {
+        formattedSong += chordLines[chordIndex] + '\n';
+        chordIndex++;
+      }
+
+      formattedSong += line + '\n';
+    }
+    
+    formattedSong += '\n<a href="${config.SONGBOOK_URL}">Открыть полный аккордник</a>';
     
     return formattedSong;
   }
