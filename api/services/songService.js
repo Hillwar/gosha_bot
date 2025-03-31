@@ -1,16 +1,29 @@
-const songs = require('../data/songs');
 const config = require('../config');
+const googleDocsService = require('./googleDocsService');
 
 // Сервис для работы с песнями
 class SongService {
   constructor() {
-    this.songs = songs;
     this.songsStats = {};
     this.lastSongRequests = {};
+    this.cachedSongs = null;
+    this.lastCacheUpdate = null;
+    this.cacheTimeout = 5 * 60 * 1000; // 5 минут
+  }
+
+  // Получение всех песен с кэшированием
+  async getAllSongs() {
+    const now = Date.now();
+    if (!this.cachedSongs || !this.lastCacheUpdate || (now - this.lastCacheUpdate > this.cacheTimeout)) {
+      console.log('Updating songs cache from Google Docs');
+      this.cachedSongs = await googleDocsService.parseSongs();
+      this.lastCacheUpdate = now;
+    }
+    return this.cachedSongs;
   }
 
   // Поиск песни по запросу
-  findSongs(query) {
+  async findSongs(query) {
     if (!query || query.trim() === '') {
       return [];
     }
@@ -18,7 +31,8 @@ class SongService {
     query = query.toLowerCase().trim();
     console.log(`Searching for songs with query: "${query}"`);
 
-    const results = this.songs.filter(song => {
+    const songs = await this.getAllSongs();
+    const results = songs.filter(song => {
       const titleMatch = song.title && song.title.toLowerCase().includes(query);
       const authorMatch = song.author && song.author.toLowerCase().includes(query);
       const lyricsMatch = song.lyrics && song.lyrics.toLowerCase().includes(query);
@@ -52,8 +66,9 @@ class SongService {
   }
 
   // Получение случайной песни
-  getRandomSong() {
-    const sortedSongs = [...this.songs].sort((a, b) => {
+  async getRandomSong() {
+    const songs = await this.getAllSongs();
+    const sortedSongs = [...songs].sort((a, b) => {
       const timeA = this.lastSongRequests[a.title] || 0;
       const timeB = this.lastSongRequests[b.title] || 0;
       return timeA - timeB;
@@ -90,9 +105,10 @@ class SongService {
   }
 
   // Получение списка всех песен
-  getSongsList() {
+  async getSongsList() {
+    const songs = await this.getAllSongs();
     let listMessage = "<b>Список песен в аккорднике:</b>\n\n";
-    this.songs.forEach((song, index) => {
+    songs.forEach((song, index) => {
       listMessage += `${index + 1}. ${song.title}`;
       if (song.author) {
         listMessage += ` - ${song.author}`;
