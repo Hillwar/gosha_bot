@@ -38,7 +38,7 @@ class GoogleDocsService {
   // Инициализация аутентификации
   async initialize() {
     try {
-      console.log('Initializing Google Docs authentication...');
+      console.log('Initializing Google Drive authentication...');
       
       if (!process.env.GOOGLE_SERVICE_ACCOUNT) {
         throw new Error('Google service account credentials not found in environment variables');
@@ -49,7 +49,10 @@ class GoogleDocsService {
       
       this.auth = new google.auth.GoogleAuth({
         credentials,
-        scopes: ['https://www.googleapis.com/auth/documents.readonly']
+        scopes: [
+          'https://www.googleapis.com/auth/drive.readonly',
+          'https://www.googleapis.com/auth/documents.readonly'
+        ]
       });
       
       console.log('Authentication initialized successfully');
@@ -74,14 +77,26 @@ class GoogleDocsService {
         throw new Error('Document ID is not valid');
       }
 
-      console.log('Requesting document with ID:', this.documentId);
-      const response = await this.docs.documents.get({
+      // Сначала получаем метаданные файла через Drive API
+      console.log('Getting file metadata...');
+      const fileMetadata = await this.drive.files.get({
         auth: this.auth,
-        documentId: this.documentId
+        fileId: this.documentId,
+        fields: 'mimeType'
       });
 
-      console.log('Document retrieved successfully');
-      return response.data;
+      console.log('File mime type:', fileMetadata.data.mimeType);
+
+      // Получаем содержимое файла
+      console.log('Downloading file content...');
+      const response = await this.drive.files.export({
+        auth: this.auth,
+        fileId: this.documentId,
+        mimeType: 'text/plain'
+      });
+
+      console.log('Document content retrieved successfully');
+      return { body: { content: this.parseTextContent(response.data) } };
     } catch (error) {
       console.error('Error getting document:', error.message);
       if (error.response) {
@@ -90,6 +105,40 @@ class GoogleDocsService {
       }
       throw error;
     }
+  }
+
+  // Парсинг текстового содержимого
+  parseTextContent(text) {
+    console.log('Parsing text content...');
+    const lines = text.split('\n');
+    const content = [];
+    let currentLine = '';
+    let isHeading = false;
+
+    for (const line of lines) {
+      // Пропускаем пустые строки
+      if (!line.trim()) continue;
+
+      // Определяем, является ли строка заголовком
+      // (предполагаем, что заголовки - это строки без отступов и специальных символов)
+      isHeading = !line.startsWith(' ') && !line.startsWith('\t') && 
+                 !line.includes(':') && !line.includes('(') && !line.includes(')');
+
+      content.push({
+        paragraph: {
+          elements: [{
+            textRun: {
+              content: line + '\n'
+            }
+          }],
+          paragraphStyle: {
+            namedStyleType: isHeading ? 'HEADING_1' : 'NORMAL_TEXT'
+          }
+        }
+      });
+    }
+
+    return content;
   }
 
   // Парсинг документа и извлечение песен
@@ -116,8 +165,7 @@ class GoogleDocsService {
         if (!text) continue;
 
         // Определяем начало новой песни по заголовку
-        if (element.paragraph.paragraphStyle?.namedStyleType === 'HEADING_1' ||
-            element.paragraph.paragraphStyle?.namedStyleType === 'HEADING_2') {
+        if (element.paragraph.paragraphStyle?.namedStyleType === 'HEADING_1') {
           if (currentSong) {
             songs.push(currentSong);
           }
@@ -130,7 +178,7 @@ class GoogleDocsService {
           };
           console.log('Found new song:', text);
         } else if (currentSong) {
-          // Определяем тип контента по форматированию или ключевым словам
+          // Определяем тип контента по ключевым словам
           if (text.toLowerCase().startsWith('автор:')) {
             currentSong.author = text.replace(/^автор:/i, '').trim();
           } else if (text.toLowerCase().startsWith('ритм:')) {
