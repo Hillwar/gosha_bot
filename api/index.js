@@ -954,7 +954,7 @@ async function handleHelpCommand(msg) {
 
 // Функция для отправки сообщения с анимацией загрузки
 const sendLoadingMessage = async (ctx) => {
-  return await ctx.reply('Загрузка...', { parse_mode: 'HTML' });
+  return await ctx.sendMessage('Загрузка...');
 };
 
 // Функция для удаления сообщения с анимацией загрузки
@@ -966,135 +966,7 @@ const deleteLoadingMessage = async (ctx, messageId) => {
   }
 };
 
-// Функция для обработки команды /list
-bot.command('list', async (ctx) => {
-  try {
-    // Отправка сообщения с анимацией загрузки
-    const loadingMessage = await sendLoadingMessage(ctx);
-    
-    // Получаем текст из документа
-    const { text } = await fetchSongbookContent();
-    
-    // Разбиваем текст на строки
-    const lines = text.split('\n');
-    
-    // Ищем песни по символу ♭
-    const songTitles = [];
-    let songTitle = '';
-    let songAuthor = '';
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      
-      if (line.startsWith('♭')) {
-        // Нашли название песни (без символа ♭)
-        songTitle = line.substring(1).trim();
-        
-        // Попытка получить автора из следующей строки
-        if (i + 1 < lines.length) {
-          songAuthor = lines[i + 1].trim();
-          
-          // Добавляем песню и автора в список
-          songTitles.push(`${songTitle} — ${songAuthor}`);
-        } else {
-          // Если нет строки автора, добавляем только название
-          songTitles.push(songTitle);
-        }
-      }
-    }
-    
-    // Удаляем сообщение с анимацией загрузки
-    await deleteLoadingMessage(ctx, loadingMessage.message_id);
-    
-    // Проверяем, есть ли песни
-    if (songTitles.length === 0) {
-      await ctx.reply('Песни не найдены.');
-      return;
-    }
-    
-    // Отправляем список песен в чат
-    await ctx.reply(`Список песен в аккорднике (${songTitles.length}):\n\n${songTitles.join('\n')}`);
-  } catch (error) {
-    console.error('Ошибка при обработке команды /list:', error);
-    await ctx.reply('Произошла ошибка при получении списка песен.');
-  }
-});
-
-// Функция для обработки команды /random
-bot.command('random', async (ctx) => {
-  try {
-    // Отправка сообщения с анимацией загрузки
-    const loadingMessage = await sendLoadingMessage(ctx);
-    
-    // Получаем текст из документа
-    const { text } = await fetchSongbookContent();
-    
-    // Разбиваем текст на строки
-    const lines = text.split('\n');
-    
-    // Ищем песни по символу ♭
-    const songs = [];
-    let currentSongStartIndex = -1;
-    let currentSongTitle = '';
-    let currentSongAuthor = '';
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      
-      if (line.startsWith('♭')) {
-        // Если нашли предыдущую песню, сохраняем её
-        if (currentSongStartIndex !== -1) {
-          const songContent = lines.slice(currentSongStartIndex, i).join('\n');
-          songs.push({
-            title: currentSongTitle,
-            author: currentSongAuthor,
-            content: songContent
-          });
-        }
-        
-        // Запоминаем новую песню
-        currentSongTitle = line.substring(1).trim();
-        
-        // Попытка получить автора из следующей строки
-        if (i + 1 < lines.length) {
-          currentSongAuthor = lines[i + 1].trim();
-          currentSongStartIndex = i;  // Запоминаем индекс начала песни
-        }
-      }
-    }
-    
-    // Добавляем последнюю песню
-    if (currentSongStartIndex !== -1) {
-      const songContent = lines.slice(currentSongStartIndex).join('\n');
-      songs.push({
-        title: currentSongTitle,
-        author: currentSongAuthor,
-        content: songContent
-      });
-    }
-    
-    // Удаляем сообщение с анимацией загрузки
-    await deleteLoadingMessage(ctx, loadingMessage.message_id);
-    
-    // Проверяем, есть ли песни
-    if (songs.length === 0) {
-      await ctx.reply('Песни не найдены.');
-      return;
-    }
-    
-    // Выбираем случайную песню
-    const randomSong = songs[Math.floor(Math.random() * songs.length)];
-    
-    // Отправляем случайную песню в чат
-    await ctx.reply(`${randomSong.title}\n${randomSong.author}\n\n${randomSong.content}`);
-  } catch (error) {
-    console.error('Ошибка при обработке команды /random:', error);
-    await ctx.reply('Произошла ошибка при получении случайной песни.');
-  }
-});
-
-/**
- * Обработка команды /search - поиск песни по названию
+// Функция для обработки команды /search - поиск песни по названию
  * @param {Object} msg - Сообщение от пользователя
  * @param {string} match - Результат регулярного выражения
  */
@@ -1723,5 +1595,210 @@ async function fetchSongbookContent() {
   } catch (error) {
     console.error('Error fetching songbook content:', error);
     throw error;
+  }
+}
+
+/**
+ * Обработка команды /list - получение списка всех песен
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleListCommand(msg) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  const chatId = msg.chat.id;
+  
+  logger.info(`User ${userId} (${userName}) requested song list`, {
+    command: '/list',
+    user: {
+      id: userId,
+      name: userName
+    }
+  });
+  
+  try {
+    // Отправка сообщения с анимацией загрузки
+    const waitMessage = await bot.sendMessage(chatId, 'Загрузка списка песен...');
+    
+    // Получаем текст из документа
+    const { text } = await fetchSongbookContent();
+    
+    // Разбиваем текст на строки
+    const lines = text.split('\n');
+    
+    // Ищем песни по символу ♭
+    const songTitles = [];
+    let songTitle = '';
+    let songAuthor = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      if (line.startsWith('♭')) {
+        // Нашли название песни (без символа ♭)
+        songTitle = line.substring(1).trim();
+        
+        // Попытка получить автора из следующей строки
+        if (i + 1 < lines.length) {
+          songAuthor = lines[i + 1].trim();
+          
+          // Добавляем песню и автора в список
+          songTitles.push(`${songTitle} — ${songAuthor}`);
+        } else {
+          // Если нет строки автора, добавляем только название
+          songTitles.push(songTitle);
+        }
+      }
+    }
+    
+    // Удаляем сообщение с анимацией загрузки
+    try {
+      await bot.deleteMessage(chatId, waitMessage.message_id);
+    } catch (error) {
+      logger.error('Ошибка при удалении сообщения загрузки:', error);
+    }
+    
+    // Проверяем, есть ли песни
+    if (songTitles.length === 0) {
+      await bot.sendMessage(chatId, 'Песни не найдены.');
+      return;
+    }
+    
+    // Формируем сообщение со списком песен
+    let message = `Список песен в аккорднике (${songTitles.length}):\n\n`;
+    
+    // Добавляем номера к песням
+    for (let i = 0; i < songTitles.length; i++) {
+      const songNumber = i + 1;
+      message += `${songNumber}. ${songTitles[i]}\n`;
+      
+      // Если сообщение становится слишком длинным, разбиваем его на части
+      if (message.length > MAX_MESSAGE_LENGTH - 200 && i < songTitles.length - 1) {
+        await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+        message = `Продолжение списка песен:\n\n`;
+      }
+    }
+    
+    // Отправляем финальное сообщение (или единственное, если список был коротким)
+    if (message.length > 0) {
+      await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+    }
+    
+    // Регистрируем статистику использования команды
+    stats.commandsUsed['/list'] = (stats.commandsUsed['/list'] || 0) + 1;
+    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+  } catch (error) {
+    logger.error('Error handling list command:', {
+      error: error.message,
+      stack: error.stack,
+      userId
+    });
+    
+    await bot.sendMessage(chatId, 'Произошла ошибка при получении списка песен. Пожалуйста, попробуйте позже.');
+  }
+}
+
+/**
+ * Обработка команды /random - получение случайной песни
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleRandomCommand(msg) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  const chatId = msg.chat.id;
+  
+  logger.info(`User ${userId} (${userName}) requested a random song`, {
+    command: '/random',
+    user: {
+      id: userId,
+      name: userName
+    }
+  });
+  
+  try {
+    // Отправка сообщения с анимацией загрузки
+    const waitMessage = await bot.sendMessage(chatId, 'Выбираю случайную песню...');
+    
+    // Получаем текст из документа
+    const { text } = await fetchSongbookContent();
+    
+    // Разбиваем текст на строки
+    const lines = text.split('\n');
+    
+    // Ищем песни по символу ♭
+    const songs = [];
+    let currentSongStartIndex = -1;
+    let currentSongTitle = '';
+    let currentSongAuthor = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      if (line.startsWith('♭')) {
+        // Если нашли предыдущую песню, сохраняем её
+        if (currentSongStartIndex !== -1) {
+          const songContent = lines.slice(currentSongStartIndex, i).join('\n');
+          songs.push({
+            title: currentSongTitle,
+            author: currentSongAuthor,
+            content: songContent
+          });
+        }
+        
+        // Запоминаем новую песню
+        currentSongTitle = line.substring(1).trim();
+        
+        // Попытка получить автора из следующей строки
+        if (i + 1 < lines.length) {
+          currentSongAuthor = lines[i + 1].trim();
+          currentSongStartIndex = i;  // Запоминаем индекс начала песни
+        }
+      }
+    }
+    
+    // Добавляем последнюю песню
+    if (currentSongStartIndex !== -1) {
+      const songContent = lines.slice(currentSongStartIndex).join('\n');
+      songs.push({
+        title: currentSongTitle,
+        author: currentSongAuthor,
+        content: songContent
+      });
+    }
+    
+    // Удаляем сообщение с анимацией загрузки
+    try {
+      await bot.deleteMessage(chatId, waitMessage.message_id);
+    } catch (error) {
+      logger.error('Ошибка при удалении сообщения загрузки:', error);
+    }
+    
+    // Проверяем, есть ли песни
+    if (songs.length === 0) {
+      await bot.sendMessage(chatId, 'Песни не найдены.');
+      return;
+    }
+    
+    // Выбираем случайную песню
+    const randomSong = songs[Math.floor(Math.random() * songs.length)];
+    
+    // Сохраняем последнюю песню в состоянии пользователя
+    userStates.set(userId, userStates.get(userId) || {});
+    userStates.get(userId).lastSongPage = -1; // Используем -1 для обозначения песни из текстового поиска
+    
+    // Отправляем случайную песню в чат
+    const formattedContent = `<b>${randomSong.title}</b>\n<i>${randomSong.author}</i>\n\n${randomSong.content}`;
+    await bot.sendMessage(chatId, formattedContent, { parse_mode: 'HTML' });
+    
+    // Регистрируем статистику использования команды
+    stats.commandsUsed['/random'] = (stats.commandsUsed['/random'] || 0) + 1;
+    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+  } catch (error) {
+    logger.error('Error handling random command:', {
+      error: error.message,
+      stack: error.stack,
+      userId
+    });
+    
+    await bot.sendMessage(chatId, 'Произошла ошибка при получении случайной песни. Пожалуйста, попробуйте позже.');
   }
 }
