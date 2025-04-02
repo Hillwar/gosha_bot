@@ -886,27 +886,63 @@ async function searchSongs(query, searchByText = false) {
       throw new Error('Invalid document structure');
     }
     
-    const songs = [];
-    let currentPage = 2; // Начинаем со второй страницы (пропускаем правила отрядного круга)
-    let foundTitles = [];
+    // Находим все TITLE элементы в документе
+    const titleElements = document.body.content.filter(item => 
+      item && item.paragraph && 
+      item.paragraph.paragraphStyle && 
+      item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
+      item.paragraph.elements && 
+      item.paragraph.elements[0] && 
+      item.paragraph.elements[0].textRun
+    );
     
-    // Сначала собираем все заголовки (названия песен) с их страницами
-    for (const element of document.body.content) {
-      if (element && element.paragraph && 
-          element.paragraph.paragraphStyle && 
-          element.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
-          element.paragraph.elements && 
-          element.paragraph.elements[0] && 
-          element.paragraph.elements[0].textRun) {
-        const title = element.paragraph.elements[0].textRun.content.trim();
-        if (title) {
-          foundTitles.push({ title, page: currentPage });
-          currentPage++;
-        }
-      }
+    if (titleElements.length === 0) {
+      logger.warn('No song titles found in document');
+      return [];
     }
     
-    logger.info(`Total songs found in document: ${foundTitles.length}`);
+    // Ищем индекс начала песен - после правил отрядного круга
+    let songStartIndex = -1;
+    let currentPage = 1;
+    
+    for (let i = 0; i < titleElements.length; i++) {
+      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+      
+      // Проверяем, является ли заголовок началом секции песен
+      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
+        songStartIndex = i;
+        break;
+      }
+      currentPage++;
+    }
+    
+    if (songStartIndex === -1) {
+      // Если не нашли чёткую границу, берём все заголовки после первого
+      songStartIndex = 1;
+      currentPage = 2; // Начинаем со второй страницы
+    }
+    
+    // Собираем информацию о песнях, исключая правила
+    const foundTitles = [];
+    
+    for (let i = songStartIndex; i < titleElements.length; i++) {
+      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+      
+      // Пропускаем заголовки, которые явно не песни
+      if (title && 
+          !title.includes('Правила') &&
+          !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
+          title !== 'Припев.' && 
+          title !== 'Припев:' &&
+          !title.match(/^Будь осознанным/)) {
+        foundTitles.push({ title, page: currentPage });
+      }
+      currentPage++;
+    }
+    
+    logger.info(`Total songs found in document after filtering: ${foundTitles.length}`);
+    
+    const songs = [];
     
     // Для поиска по названию используем более точное сопоставление
     if (!searchByText) {
@@ -1109,38 +1145,72 @@ bot.onText(/\/list/, async (msg) => {
       throw new Error('Invalid document structure');
     }
     
-    // Находим заголовки (TITLE) в документе
-    const titles = document.body.content
-      .filter(item => item && item.paragraph && item.paragraph.paragraphStyle && 
-                       item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
-                       item.paragraph.elements && item.paragraph.elements[0] && 
-                       item.paragraph.elements[0].textRun && 
-                       item.paragraph.elements[0].textRun.content)
-      .map(item => item.paragraph.elements[0].textRun.content.trim());
+    // Находим все TITLE элементы в документе
+    const titleElements = document.body.content.filter(item => 
+      item && item.paragraph && 
+      item.paragraph.paragraphStyle && 
+      item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
+      item.paragraph.elements && 
+      item.paragraph.elements[0] && 
+      item.paragraph.elements[0].textRun
+    );
     
-    if (titles.length === 0) {
-      logger.warn('No songs found in document');
+    if (titleElements.length === 0) {
+      logger.warn('No song titles found in document');
       await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
       return;
     }
     
-    // Пропускаем первый заголовок (Правила отрядного круга) и берем только песни
-    // начиная со второй страницы документа
-    const songs = titles.slice(1);
+    // Ищем индекс начала песен - после правил отрядного круга
+    // Правила обычно заканчиваются фразой "Будь осознанным и помни о здравом смысле"
+    // или "С ❤️ песенная служба" или просто "C"
+    let songStartIndex = -1;
     
-    if (songs.length === 0) {
-      logger.warn('No songs found after skipping the first title');
+    for (let i = 0; i < titleElements.length; i++) {
+      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+      
+      // Проверяем, является ли заголовок началом секции песен
+      // После фразы "С" обычно начинаются песни
+      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
+        songStartIndex = i;
+        break;
+      }
+    }
+    
+    if (songStartIndex === -1) {
+      // Если не нашли чёткую границу, берём все заголовки после первого
+      // (первый заголовок - правила отрядного круга)
+      songStartIndex = 1;
+    }
+    
+    // Получаем только названия песен, начиная с найденного индекса
+    const songTitles = titleElements.slice(songStartIndex).map(item => 
+      item.paragraph.elements[0].textRun.content.trim()
+    ).filter(title => 
+      // Дополнительно фильтруем пустые строки и строки, которые явно не песни
+      title && 
+      !title.includes('Правила') &&
+      !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
+      title !== 'Припев.' && 
+      title !== 'Припев:' &&
+      !title.match(/^Будь осознанным/)
+    );
+    
+    if (songTitles.length === 0) {
+      logger.warn('No song titles found after filtering rules');
       await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
       return;
     }
     
     // Добавляем нумерацию к списку песен
-    const numberedSongs = songs.map((song, index) => `${index + 1}. ${song}`);
+    const numberedSongs = songTitles.map((song, index) => `${index + 1}. ${song}`);
+    
+    logger.info(`Found ${songTitles.length} songs after filtering rules`);
     
     const message = 'Список всех песен:\n\n' + numberedSongs.join('\n');
     await bot.sendMessage(chatId, message);
     logger.info(`Successfully sent song list to user ${chatId}`, {
-      songCount: songs.length
+      songCount: songTitles.length
     });
   } catch (error) {
     logger.error(`Error fetching songs for user ${chatId}:`, {
@@ -1196,38 +1266,67 @@ bot.onText(/\/random/, async (msg) => {
       throw new Error('Invalid document structure');
     }
     
-    // Получаем все названия песен (заголовки)
-    const titles = [];
-    let currentPage = 1;
+    // Находим все TITLE элементы в документе
+    const titleElements = document.body.content.filter(item => 
+      item && item.paragraph && 
+      item.paragraph.paragraphStyle && 
+      item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
+      item.paragraph.elements && 
+      item.paragraph.elements[0] && 
+      item.paragraph.elements[0].textRun
+    );
     
-    for (const element of document.body.content) {
-      if (element && element.paragraph && 
-          element.paragraph.paragraphStyle && 
-          element.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
-          element.paragraph.elements && 
-          element.paragraph.elements[0] && 
-          element.paragraph.elements[0].textRun) {
-        const title = element.paragraph.elements[0].textRun.content.trim() || '';
-        if (title) {
-          titles.push({ title, page: currentPage });
-          currentPage++;
-        }
-      }
-    }
-    
-    if (titles.length === 0) {
+    if (titleElements.length === 0) {
       logger.warn('No songs found for random selection');
       await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
       return;
     }
     
-    // Пропускаем первый заголовок (Правила отрядного круга) и выбираем только из песен
-    // (начиная со второй страницы)
-    const songs = titles.slice(1);
+    // Ищем индекс начала песен - после правил отрядного круга
+    // Правила обычно заканчиваются фразой "Будь осознанным и помни о здравом смысле"
+    // или "С ❤️ песенная служба" или просто "C"
+    let songStartIndex = -1;
+    let currentPage = 1;
+    const songs = [];
+    
+    for (let i = 0; i < titleElements.length; i++) {
+      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+      
+      // Проверяем, является ли заголовок началом секции песен
+      // После фразы "С" обычно начинаются песни
+      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
+        songStartIndex = i;
+        break;
+      }
+      currentPage++;
+    }
+    
+    if (songStartIndex === -1) {
+      // Если не нашли чёткую границу, берём все заголовки после первого
+      // (первый заголовок - правила отрядного круга)
+      songStartIndex = 1;
+      currentPage = 2; // Начинаем со второй страницы
+    }
+    
+    // Собираем информацию о песнях
+    for (let i = songStartIndex; i < titleElements.length; i++) {
+      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+      
+      // Пропускаем заголовки, которые явно не песни
+      if (title && 
+          !title.includes('Правила') &&
+          !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
+          title !== 'Припев.' && 
+          title !== 'Припев:' &&
+          !title.match(/^Будь осознанным/)) {
+        songs.push({ title, page: currentPage });
+      }
+      currentPage++;
+    }
     
     if (songs.length === 0) {
-      logger.warn('No songs found after skipping the first title');
-      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
+      logger.warn('No valid songs found for random selection after filtering');
+      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни для случайного выбора.');
       return;
     }
     
