@@ -528,15 +528,18 @@ async function performSongSearch(msg, query, searchByText = false) {
     if (songs.length === 1) {
       const song = songs[0];
       
+      // Очищаем название от символов # ♭
+      const cleanTitle = song.title.replace(/[#♭]/g, '').trim();
+      
       // Удаляем сообщение о поиске
       await bot.deleteMessage(chatId, waitMessage.message_id);
       
       // Отправляем песню
-      const formattedText = formatSongForDisplay(song.title, song.author, song.fullText);
+      const formattedText = formatSongForDisplay(cleanTitle, song.author, song.fullText);
       await sendFormattedSong(chatId, formattedText);
       
       // Сохраняем последнюю песню
-      userStates.get(userId).lastSongTitle = song.title;
+      userStates.get(userId).lastSongTitle = cleanTitle;
       return;
     }
     
@@ -545,12 +548,17 @@ async function performSongSearch(msg, query, searchByText = false) {
     const maxResults = Math.min(songs.length, 20);
     const songsToShow = songs.slice(0, maxResults);
     
+    // Очищаем названия от символов # ♭
+    songsToShow.forEach(song => {
+      song.cleanTitle = song.title.replace(/[#♭]/g, '').trim();
+    });
+    
     await bot.editMessageText(`Найдено ${songs.length} песен${maxResults < songs.length ? ' (показаны первые ' + maxResults + ')' : ''}. Выберите нужную:`, {
       chat_id: chatId,
       message_id: waitMessage.message_id,
       reply_markup: {
         inline_keyboard: songsToShow.map((song, index) => [{
-          text: `${song.title}${song.author ? ' - ' + song.author.substring(0, 30) : ''}`,
+          text: `${song.cleanTitle}${song.author ? ' - ' + song.author.substring(0, 30) : ''}`,
           callback_data: `song_${index}`
         }])
       }
@@ -623,12 +631,15 @@ async function handleCallbackQuery(callback) {
       
       const song = userSongs[songIndex];
       
+      // Очищаем название от символов # ♭ если необходимо
+      const cleanTitle = song.cleanTitle || song.title.replace(/[#♭]/g, '').trim();
+      
       // Сохраняем выбранную песню в истории
       userStates.set(userId, userStates.get(userId) || {});
-      userStates.get(userId).lastSongTitle = song.title;
+      userStates.get(userId).lastSongTitle = cleanTitle;
       
       // Отправляем песню
-      const formattedText = formatSongForDisplay(song.title, song.author, song.fullText);
+      const formattedText = formatSongForDisplay(cleanTitle, song.author, song.fullText);
       await sendFormattedSong(chatId, formattedText);
       
       // Удаляем сообщение со списком
@@ -666,18 +677,21 @@ async function handleCallbackQuery(callback) {
       
       const song = userSongs[songIndex];
       
+      // Очищаем название от символов # ♭ если необходимо
+      const cleanTitle = song.cleanTitle || song.title.replace(/[#♭]/g, '').trim();
+      
       // Сохраняем выбранную песню в истории
       userStates.set(userId, userStates.get(userId) || {});
-      userStates.get(userId).lastSongTitle = song.title;
+      userStates.get(userId).lastSongTitle = cleanTitle;
       
       // Показываем аккорды
       const chords = extractChords(song.fullText);
       
       if (chords.length === 0) {
-        await bot.sendMessage(chatId, `Аккорды для песни "${song.title}" не найдены.`);
+        await bot.sendMessage(chatId, `Аккорды для песни "${cleanTitle}" не найдены.`);
       } else {
         await bot.sendMessage(chatId, 
-          `Аккорды для песни "${song.title}":\n\n${chords.join(', ')}`,
+          `Аккорды для песни "${cleanTitle}":\n\n${chords.join(', ')}`,
           { parse_mode: 'HTML' }
         );
       }
@@ -773,8 +787,9 @@ async function sendLongMessage(chatId, text) {
           await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
         }
         
-        // Новая часть с заголовком
-        currentPart = `<b>[Продолжение]</b> ${titleLine.replace(/<b>|<\/b>/g, '')}\n\n`;
+        // Новая часть с заголовком (убедимся, что заголовок не содержит символы # ♭)
+        const cleanTitleText = titleLine.replace(/<b>|<\/b>|#|♭/g, '').trim();
+        currentPart = `<b>[Продолжение]</b> ${cleanTitleText}\n\n`;
       }
       
       // Добавляем строку
@@ -922,13 +937,19 @@ async function handleListCommand(msg) {
         continue;
       }
       
+      // Очищаем название от символов # ♭
+      const cleanTitle = song.title.replace(/[#♭]/g, '').trim();
+      
       // Нормализуем название для унификации
-      const normalizedTitle = song.title.toLowerCase().trim();
+      const normalizedTitle = cleanTitle.toLowerCase().trim();
       
       // Обрабатываем дубликаты - оставляем версию с автором, если есть
       if (!uniqueSongs.has(normalizedTitle) || 
           (!uniqueSongs.get(normalizedTitle).author && song.author)) {
-        uniqueSongs.set(normalizedTitle, song);
+        
+        // Сохраняем песню с очищенным названием
+        const cleanedSong = { ...song, title: cleanTitle };
+        uniqueSongs.set(normalizedTitle, cleanedSong);
       }
     }
     
@@ -996,12 +1017,15 @@ async function handleRandomCommand(msg) {
     // Выбираем случайную песню
     const randomSong = songs[Math.floor(Math.random() * songs.length)];
     
+    // Очищаем название от символов # ♭
+    const cleanTitle = randomSong.title.replace(/[#♭]/g, '').trim();
+    
     // Сохраняем информацию
     userStates.set(userId, userStates.get(userId) || {});
-    userStates.get(userId).lastSongTitle = randomSong.title;
+    userStates.get(userId).lastSongTitle = cleanTitle;
     
     // Отправляем песню
-    const formattedContent = formatSongForDisplay(randomSong.title, randomSong.author, randomSong.fullText);
+    const formattedContent = formatSongForDisplay(cleanTitle, randomSong.author, randomSong.fullText);
     await sendFormattedSong(chatId, formattedContent);
     
     // Статистика
@@ -1028,15 +1052,23 @@ async function handleLastCommand(msg) {
   try {
     // Ищем последнюю просмотренную песню
     const { songs } = await fetchSongbookContent();
-    const lastSong = songs.find(s => s.title === userState.lastSongTitle);
+    
+    // Найдем песню, сравнивая очищенные названия
+    const lastSong = songs.find(s => {
+      const cleanTitle = s.title.replace(/[#♭]/g, '').trim();
+      return cleanTitle === userState.lastSongTitle;
+    });
     
     if (!lastSong) {
       await bot.sendMessage(msg.chat.id, 'Не удалось найти последнюю просмотренную песню.');
       return;
     }
     
+    // Очищаем название от символов # ♭
+    const cleanTitle = lastSong.title.replace(/[#♭]/g, '').trim();
+    
     // Отправляем песню
-    const formattedText = formatSongForDisplay(lastSong.title, lastSong.author, lastSong.fullText);
+    const formattedText = formatSongForDisplay(cleanTitle, lastSong.author, lastSong.fullText);
     await sendFormattedSong(msg.chat.id, formattedText);
     
     // Статистика
@@ -1131,7 +1163,9 @@ async function searchSongsByAll(msg, query) {
         return false;
       }
       
-      const titleMatch = song.title.toLowerCase().includes(query.toLowerCase());
+      // Очищаем название от символов # ♭ для поиска
+      const cleanTitle = song.title.replace(/[#♭]/g, '').trim();
+      const titleMatch = cleanTitle.toLowerCase().includes(query.toLowerCase());
       const textMatch = song.fullText.toLowerCase().includes(query.toLowerCase());
       const authorMatch = song.author && song.author.toLowerCase().includes(query.toLowerCase());
       
@@ -1155,12 +1189,15 @@ async function searchSongsByAll(msg, query) {
     if (foundSongs.length === 1) {
       const song = foundSongs[0];
       
+      // Очищаем название от символов # ♭
+      const cleanTitle = song.title.replace(/[#♭]/g, '').trim();
+      
       // Сохраняем последнюю песню
       userStates.set(userId, userStates.get(userId) || {});
-      userStates.get(userId).lastSongTitle = song.title;
+      userStates.get(userId).lastSongTitle = cleanTitle;
       
       // Отправляем песню
-      const formattedText = formatSongForDisplay(song.title, song.author, song.fullText);
+      const formattedText = formatSongForDisplay(cleanTitle, song.author, song.fullText);
       await sendFormattedSong(chatId, formattedText);
       return;
     }
@@ -1170,16 +1207,21 @@ async function searchSongsByAll(msg, query) {
     const maxResults = Math.min(foundSongs.length, 15);
     const songsToShow = foundSongs.slice(0, maxResults);
     
+    // Очищаем названия от символов # ♭
+    songsToShow.forEach(song => {
+      song.cleanTitle = song.title.replace(/[#♭]/g, '').trim();
+    });
+    
     let message = `Найдено ${foundSongs.length} песен${maxResults < foundSongs.length ? ' (показаны первые ' + maxResults + ')' : ''}. Выберите нужную:\n\n`;
     
     songsToShow.forEach((song, index) => {
-      message += `${index + 1}. ${song.title}${song.author ? ' - ' + song.author.substring(0, 30) : ''}\n`;
+      message += `${index + 1}. ${song.cleanTitle}${song.author ? ' - ' + song.author.substring(0, 30) : ''}\n`;
     });
     
     await bot.sendMessage(chatId, message, {
       reply_markup: {
         inline_keyboard: songsToShow.map((song, index) => [{
-          text: song.title,
+          text: song.cleanTitle,
           callback_data: `song_${index}`
         }])
       }
