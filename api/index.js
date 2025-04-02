@@ -1263,22 +1263,51 @@ async function handleListCommand(msg) {
       return;
     }
     
+    // Фильтруем песни, чтобы убрать дубликаты и пустые элементы
+    const filteredSongs = [];
+    const processedTitles = new Set();
+    
+    for (const song of songs) {
+      // Очищаем название от символа ♭
+      const cleanTitle = song.title.replace(/♭/g, '').trim();
+      
+      // Пропускаем пустые названия или названия с "Ритмика" или если это явно не песня
+      if (!cleanTitle || 
+          cleanTitle === 'Ритмика' || 
+          cleanTitle.includes('Припев') ||
+          cleanTitle.includes('Правила орлятского круга') ||
+          cleanTitle.match(/^\d+\.\s/) || // Пропускаем пронумерованные правила
+          processedTitles.has(cleanTitle)) {
+        continue;
+      }
+      
+      // Добавляем в список обработанных названий
+      processedTitles.add(cleanTitle);
+      
+      // Добавляем песню в отфильтрованный список
+      filteredSongs.push({
+        title: cleanTitle,
+        author: song.author
+      });
+    }
+    
     // Формируем сообщение со списком песен
-    let message = `Список песен в аккорднике (${songs.length}):\n\n`;
+    let message = `Список песен в аккорднике (${filteredSongs.length}):\n\n`;
     
     // Добавляем номера к песням с авторами
-    for (let i = 0; i < songs.length; i++) {
+    for (let i = 0; i < filteredSongs.length; i++) {
       const songNumber = i + 1;
-      const song = songs[i];
+      const song = filteredSongs[i];
       
-      if (song.author) {
+      // Формируем строку с названием и автором (если есть)
+      if (song.author && song.author.trim() && !song.author.includes('♭')) {
         message += `${songNumber}. ${song.title} — ${song.author}\n`;
       } else {
         message += `${songNumber}. ${song.title}\n`;
       }
       
       // Если сообщение становится слишком длинным, разбиваем его на части
-      if (message.length > MAX_MESSAGE_LENGTH - 200 && i < songs.length - 1) {
+      if (message.length > MAX_MESSAGE_LENGTH - 200 && i < filteredSongs.length - 1) {
         await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
         message = `Продолжение списка песен:\n\n`;
       }
