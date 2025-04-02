@@ -1109,7 +1109,8 @@ bot.onText(/\/list/, async (msg) => {
       throw new Error('Invalid document structure');
     }
     
-    const songs = document.body.content
+    // Находим заголовки (TITLE) в документе
+    const titles = document.body.content
       .filter(item => item && item.paragraph && item.paragraph.paragraphStyle && 
                        item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
                        item.paragraph.elements && item.paragraph.elements[0] && 
@@ -1117,8 +1118,18 @@ bot.onText(/\/list/, async (msg) => {
                        item.paragraph.elements[0].textRun.content)
       .map(item => item.paragraph.elements[0].textRun.content.trim());
     
-    if (songs.length === 0) {
+    if (titles.length === 0) {
       logger.warn('No songs found in document');
+      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
+      return;
+    }
+    
+    // Пропускаем первый заголовок (Правила отрядного круга) и берем только песни
+    // начиная со второй страницы документа
+    const songs = titles.slice(1);
+    
+    if (songs.length === 0) {
+      logger.warn('No songs found after skipping the first title');
       await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
       return;
     }
@@ -1167,6 +1178,102 @@ bot.onText(/\/chords/, async (msg) => {
     userStates.set(chatId, {});
   }
   userStates.get(chatId).lastBotMessageId = sentMessage.message_id;
+});
+
+// Обработчик команды /random
+bot.onText(/\/random/, async (msg) => {
+  const chatId = msg.chat.id;
+  logger.info(`User ${chatId} requested random song`, {
+    user: msg.from,
+    chat: msg.chat
+  });
+  
+  try {
+    const document = await getDocumentContent();
+    
+    if (!document || !document.body || !document.body.content) {
+      logger.error('Document structure is invalid for random song');
+      throw new Error('Invalid document structure');
+    }
+    
+    // Получаем все названия песен (заголовки)
+    const titles = [];
+    let currentPage = 1;
+    
+    for (const element of document.body.content) {
+      if (element && element.paragraph && 
+          element.paragraph.paragraphStyle && 
+          element.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
+          element.paragraph.elements && 
+          element.paragraph.elements[0] && 
+          element.paragraph.elements[0].textRun) {
+        const title = element.paragraph.elements[0].textRun.content.trim() || '';
+        if (title) {
+          titles.push({ title, page: currentPage });
+          currentPage++;
+        }
+      }
+    }
+    
+    if (titles.length === 0) {
+      logger.warn('No songs found for random selection');
+      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
+      return;
+    }
+    
+    // Пропускаем первый заголовок (Правила отрядного круга) и выбираем только из песен
+    // (начиная со второй страницы)
+    const songs = titles.slice(1);
+    
+    if (songs.length === 0) {
+      logger.warn('No songs found after skipping the first title');
+      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
+      return;
+    }
+    
+    // Выбираем случайную песню
+    const randomIndex = Math.floor(Math.random() * songs.length);
+    const selectedSong = songs[randomIndex];
+    
+    logger.debug('Selected random song', { 
+      index: randomIndex, 
+      title: selectedSong.title, 
+      page: selectedSong.page,
+      totalSongs: songs.length
+    });
+    
+    // Получаем содержимое песни
+    const documentId = getDocumentIdFromUrl(process.env.SONGBOOK_URL);
+    const songContent = await getSongContent(documentId, selectedSong.page);
+    
+    if (!songContent) {
+      logger.error('Empty song content returned', { 
+        title: selectedSong.title, 
+        page: selectedSong.page 
+      });
+      throw new Error('Song content is empty');
+    }
+    
+    // Разделяем название и текст песни
+    const contentLines = songContent.split('\n');
+    let songTitle = selectedSong.title;
+    let songTextOnly = contentLines.slice(1).join('\n').trim();
+    
+    // Отправляем песню в отформатированном виде
+    const success = await sendFormattedSong(chatId, songTitle, songTextOnly, selectedSong.page, true);
+    
+    if (!success) {
+      throw new Error('Failed to send formatted song');
+    }
+  } catch (error) {
+    logger.error(`Error sending random song to user ${chatId}:`, {
+      error: error.message,
+      stack: error.stack,
+      user: msg.from,
+      chat: msg.chat
+    });
+    await bot.sendMessage(chatId, 'Произошла ошибка при получении случайной песни. Пожалуйста, убедитесь, что URL документа указан верно и у бота есть доступ к нему.');
+  }
 });
 
 // Добавляем функцию для разделения длинных сообщений (после определения bot)
