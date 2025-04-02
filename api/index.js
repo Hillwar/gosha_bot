@@ -735,36 +735,16 @@ async function searchSongs(query, searchByText = false) {
       item.paragraph.elements[0].textRun
     );
     
-    if (titleElements.length === 0) {
-      logger.warn('No song titles found in document');
+    if (titleElements.length <= 1) {
+      logger.warn('В документе недостаточно песен для поиска');
       return [];
     }
     
-    // Ищем индекс начала песен - после правил отрядного круга
-    let songStartIndex = -1;
-    let currentPage = 1;
-    
-    for (let i = 0; i < titleElements.length; i++) {
-      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
-      
-      // Проверяем, является ли заголовок началом секции песен
-      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
-        songStartIndex = i;
-        break;
-      }
-      currentPage++;
-    }
-    
-    if (songStartIndex === -1) {
-      // Если не нашли чёткую границу, берём все заголовки после первого
-      songStartIndex = 1;
-      currentPage = 2; // Начинаем со второй страницы
-    }
-    
-    // Собираем информацию о песнях, исключая правила
+    // Всегда пропускаем первый заголовок (правила) и начинаем со второго
     const foundTitles = [];
     
-    for (let i = songStartIndex; i < titleElements.length; i++) {
+    // Начинаем с индекса 1 (второй элемент)
+    for (let i = 1; i < titleElements.length; i++) {
       const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
       
       // Пропускаем заголовки, которые явно не песни
@@ -774,12 +754,11 @@ async function searchSongs(query, searchByText = false) {
           title !== 'Припев.' && 
           title !== 'Припев:' &&
           !title.match(/^Будь осознанным/)) {
-        foundTitles.push({ title, page: currentPage });
+        foundTitles.push({ title, page: i + 1 });  // Страница = индекс + 1
       }
-      currentPage++;
     }
     
-    logger.info(`Total songs found in document after filtering: ${foundTitles.length}`);
+    logger.info(`Всего найдено ${foundTitles.length} песен в документе после фильтрации`);
     
     const songs = [];
     
@@ -812,7 +791,7 @@ async function searchSongs(query, searchByText = false) {
         }
       }
       
-      logger.info(`Found ${exactMatches.length} matching titles for query: "${query}"`, {
+      logger.info(`Найдено ${exactMatches.length} совпадений по названию для запроса "${query}"`, {
         query,
         matches: exactMatches.map(m => m.title)
       });
@@ -831,7 +810,7 @@ async function searchSongs(query, searchByText = false) {
             });
           }
         } catch (error) {
-          logger.error(`Error getting song content for page ${titleInfo.page}:`, {
+          logger.error(`Ошибка получения содержимого песни для страницы ${titleInfo.page}:`, {
             error: error.message
           });
           // Продолжаем поиск даже при ошибке для одной из песен
@@ -856,7 +835,7 @@ async function searchSongs(query, searchByText = false) {
             });
           }
         } catch (error) {
-          logger.error(`Error getting song content for page ${titleInfo.page}:`, {
+          logger.error(`Ошибка получения содержимого песни для страницы ${titleInfo.page}:`, {
             error: error.message
           });
           // Продолжаем поиск даже при ошибке для одной из песен
@@ -864,14 +843,14 @@ async function searchSongs(query, searchByText = false) {
       }
     }
     
-    logger.info(`Found ${songs.length} songs matching query: "${query}"`, {
+    logger.info(`Найдено ${songs.length} песен для запроса "${query}"`, {
       query,
       searchByText,
       songs: songs.map(s => ({ title: s.title, page: s.page }))
     });
     return songs;
   } catch (error) {
-    logger.error('Error searching songs:', {
+    logger.error('Ошибка поиска песен:', {
       error: error.message,
       stack: error.stack,
       query,
@@ -987,57 +966,36 @@ async function handleListCommand(msg) {
       item.paragraph.elements[0].textRun
     );
     
-    if (titleElements.length === 0) {
-      await bot.sendMessage(msg.chat.id, 'В документе не найдено ни одной песни.');
+    if (titleElements.length <= 1) {
+      await bot.sendMessage(msg.chat.id, 'В документе недостаточно песен.');
       return;
     }
     
-    // Ищем индекс начала песен - после правил отрядного круга
-    let songStartIndex = -1;
-    let currentPage = 1;
-    
-    for (let i = 0; i < titleElements.length; i++) {
-      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
-      
-      // Проверяем, является ли заголовок началом секции песен
-      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
-        songStartIndex = i;
-        break;
-      }
-      currentPage++;
-    }
-    
-    if (songStartIndex === -1) {
-      // Если не нашли чёткую границу, берём все заголовки после первого
-      songStartIndex = 1;
-      currentPage = 2; // Начинаем со второй страницы
-    }
-    
-    // Собираем информацию о песнях, исключая правила
+    // Всегда пропускаем первый заголовок (правила) и начинаем со второго
     const songTitles = [];
     
-    for (let i = songStartIndex; i < titleElements.length; i++) {
+    // Начинаем с индекса 1 (второй элемент)
+    for (let i = 1; i < titleElements.length; i++) {
       const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
       
-      // Пропускаем заголовки, которые явно не песни
+      // Дополнительно фильтруем заголовки, которые явно не песни
       if (title && 
           !title.includes('Правила') && 
           !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
           title !== 'Припев.' && 
           title !== 'Припев:' &&
           !title.match(/^Будь осознанным/)) {
-        songTitles.push({ title, page: currentPage });
+        songTitles.push({ title, page: i + 1 });  // Страница = индекс + 1
       }
-      currentPage++;
     }
     
     // Если после фильтрации не осталось песен
     if (songTitles.length === 0) {
-      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации правил.');
+      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации.');
       return;
     }
     
-    logger.info(`Found ${songTitles.length} songs after filtering rules`);
+    logger.info(`Found ${songTitles.length} songs for list command`);
     
     // Формируем сообщение с нумерованным списком песен
     let message = '<b>Список песен:</b>\n\n';
@@ -1110,53 +1068,32 @@ async function handleRandomCommand(msg) {
       item.paragraph.elements[0].textRun
     );
     
-    if (titleElements.length === 0) {
-      await bot.sendMessage(msg.chat.id, 'В документе не найдено ни одной песни.');
+    if (titleElements.length <= 1) {
+      await bot.sendMessage(msg.chat.id, 'В документе недостаточно песен.');
       return;
     }
     
-    // Ищем индекс начала песен - после правил отрядного круга
-    let songStartIndex = -1;
-    let currentPage = 1;
-    
-    for (let i = 0; i < titleElements.length; i++) {
-      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
-      
-      // Проверяем, является ли заголовок началом секции песен
-      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
-        songStartIndex = i;
-        break;
-      }
-      currentPage++;
-    }
-    
-    if (songStartIndex === -1) {
-      // Если не нашли чёткую границу, берём все заголовки после первого
-      songStartIndex = 1;
-      currentPage = 2; // Начинаем со второй страницы
-    }
-    
-    // Собираем информацию о песнях, исключая правила
+    // Всегда пропускаем первый заголовок (правила) и начинаем со второго
     const songs = [];
     
-    for (let i = songStartIndex; i < titleElements.length; i++) {
+    // Начинаем с индекса 1 (второй элемент)
+    for (let i = 1; i < titleElements.length; i++) {
       const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
       
-      // Пропускаем заголовки, которые явно не песни
+      // Дополнительно фильтруем заголовки, которые явно не песни
       if (title && 
           !title.includes('Правила') && 
           !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
           title !== 'Припев.' && 
           title !== 'Припев:' &&
           !title.match(/^Будь осознанным/)) {
-        songs.push({ title, page: currentPage });
+        songs.push({ title, page: i + 1 });  // Страница = индекс + 1
       }
-      currentPage++;
     }
     
     // Если после фильтрации не осталось песен
     if (songs.length === 0) {
-      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации правил.');
+      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации.');
       return;
     }
     
