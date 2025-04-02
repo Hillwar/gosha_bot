@@ -292,10 +292,12 @@ function formatSongForDisplay(title, author, text) {
   
   // Обрабатываем остальные строки
   for (let i = skipLines; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i].trim();
     
     // Добавляем обработанную строку к результату
-    processedText += escapeHtml(line) + '\n';
+    if (line) {
+      processedText += escapeHtml(line) + '\n';
+    }
   }
   
   // Добавляем текст к результату
@@ -635,9 +637,10 @@ async function handleCircleRulesCommand(msg) {
           break;
         }
         
-        // Добавляем текст к правилам
-        if (text.trim()) {
-          rules += text + '\n\n';
+        // Добавляем текст к правилам если он не пустой
+        const trimmedText = text.trim();
+        if (trimmedText) {
+          rules += trimmedText + '\n';
         }
       }
     }
