@@ -93,36 +93,56 @@ const stats = {
  * Инициализация Google API
  */
 let auth;
-if (process.env.GOOGLE_SERVICE_ACCOUNT_B64) {
-  // Используем учетные данные в формате base64
-  const credentials = JSON.parse(Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_B64, 'base64').toString('utf-8'));
-  auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/documents.readonly']
-  });
-} else if (process.env.GOOGLE_SERVICE_ACCOUNT) {
-  // Используем учетные данные в формате JSON-строки
-  try {
-    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+try {
+  // Используем файл учетных данных напрямую
+  const credentialsPath = path.join(__dirname, '..', 'Gosha IAM Admin.json');
+  
+  if (require('fs').existsSync(credentialsPath)) {
+    console.log('✅ Найден файл учетных данных Google API');
+    logger.info(`Используется файл учетных данных: ${credentialsPath}`);
+    
     auth = new google.auth.GoogleAuth({
-      credentials,
+      keyFile: credentialsPath,
       scopes: ['https://www.googleapis.com/auth/documents.readonly']
     });
-  } catch (err) {
-    console.error('Ошибка при парсинге GOOGLE_SERVICE_ACCOUNT:', err);
-    logger.error('Ошибка при парсинге GOOGLE_SERVICE_ACCOUNT:', {
-      error: err.message,
-      stack: err.stack
-    });
-    // Создаем базовую авторизацию для возможности запуска приложения с ошибкой
-    auth = new google.auth.GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/documents.readonly']
-    });
+  } else if (process.env.GOOGLE_SERVICE_ACCOUNT_B64) {
+    // Используем учетные данные в формате base64 в качестве запасного варианта
+    console.log('⚠️ Файл учетных данных не найден, используется переменная окружения GOOGLE_SERVICE_ACCOUNT_B64');
+    logger.info('Используются учетные данные из переменной окружения GOOGLE_SERVICE_ACCOUNT_B64');
+    
+    let credentials;
+    try {
+      const decodedCredentials = Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_B64, 'base64').toString('utf-8');
+      credentials = JSON.parse(decodedCredentials);
+      
+      // Проверяем, нет ли символа конца строки, который может вызвать ошибку
+      if (credentials.private_key && credentials.private_key.indexOf('\\n') !== -1) {
+        credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+      }
+      
+      auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/documents.readonly']
+      });
+    } catch (err) {
+      logger.error('Ошибка при декодировании GOOGLE_SERVICE_ACCOUNT_B64:', {
+        error: err.message,
+        stack: err.stack
+      });
+      throw new Error(`Не удалось декодировать учетные данные из переменной GOOGLE_SERVICE_ACCOUNT_B64: ${err.message}`);
+    }
+  } else {
+    // Если учетные данные не предоставлены, выводим предупреждение
+    console.warn('ВНИМАНИЕ: Учетные данные Google API не найдены!');
+    logger.warn('Учетные данные Google API не найдены. Бот не сможет получать данные из Google Docs.');
+    throw new Error('Учетные данные Google API не найдены.');
   }
-} else {
-  // Если учетные данные не предоставлены, выводим предупреждение
-  console.warn('ВНИМАНИЕ: Учетные данные Google API не найдены!');
-  logger.warn('Учетные данные Google API не найдены. Бот не сможет получать данные из Google Docs.');
+} catch (error) {
+  console.error(`❌ Ошибка инициализации Google API: ${error.message}`);
+  logger.error('Ошибка инициализации Google API:', {
+    error: error.message,
+    stack: error.stack
+  });
   
   // Создаем базовую авторизацию для возможности запуска приложения с ошибкой
   auth = new google.auth.GoogleAuth({
@@ -1451,7 +1471,238 @@ async function handleCallbackQuery(callback) {
 }
 
 /**
- * Отправляет отформатированную песню пользователю
+ * Анализирует текстовый элемент для определения, является ли он аккордом
+ * @param {string} text - Текст для проверки
+ * @return {boolean} - true, если текст похож на аккорд
+ */
+function isChord(text) {
+  // Паттерны для распознавания аккордов (основные)
+  const chordPatterns = [
+    /^[ABCDEFGH][m]?$/,  // Базовые аккорды: A, Am, C, Cm, и т.д.
+    /^[ABCDEFGH][m]?(7|9|11|13|maj7|min7|sus2|sus4|dim|aug)?$/,  // С добавлением 7, maj7, и т.д.
+    /^[ABCDEFGH][m]?[\/#][ABCDEFGH]$/,  // Аккорды с басом: A/G, C/G, и т.д.
+    /^[ABCDEFGH][#b]?[m]?$/  // Аккорды с диезами/бемолями: A#, Bb, F#m, и т.д.
+  ];
+
+  // Типичные названия аккордов вручную для проверки
+  const commonChords = [
+    'A', 'Am', 'A7', 'Amaj7', 'Am7', 'Asus', 'Asus4', 'A/E',
+    'B', 'Bm', 'B7', 'Bmaj7', 'Bm7', 'Bsus', 'Bsus4', 'B/F#',
+    'C', 'Cm', 'C7', 'Cmaj7', 'Cm7', 'Csus', 'Csus4', 'C/G',
+    'D', 'Dm', 'D7', 'Dmaj7', 'Dm7', 'Dsus', 'Dsus4', 'D/A',
+    'E', 'Em', 'E7', 'Emaj7', 'Em7', 'Esus', 'Esus4', 'E/B',
+    'F', 'Fm', 'F7', 'Fmaj7', 'Fm7', 'Fsus', 'Fsus4', 'F/C',
+    'G', 'Gm', 'G7', 'Gmaj7', 'Gm7', 'Gsus', 'Gsus4', 'G/D',
+    'A#', 'A#m', 'Bb', 'Bbm', 'C#', 'C#m', 'Db', 'Dbm',
+    'D#', 'D#m', 'Eb', 'Ebm', 'F#', 'F#m', 'Gb', 'Gbm',
+    'G#', 'G#m', 'Ab', 'Abm'
+  ];
+
+  // Проверяем, соответствует ли текст одному из паттернов или является известным аккордом
+  const trimmedText = text.trim();
+  
+  // Прямое совпадение со списком
+  if (commonChords.includes(trimmedText)) {
+    return true;
+  }
+  
+  // Проверка по регулярным выражениям
+  for (const pattern of chordPatterns) {
+    if (pattern.test(trimmedText)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Определяет, является ли строка заголовком части песни (припев, куплет и т.д.)
+ * @param {string} text - Текст для проверки
+ * @return {boolean} - true, если текст является заголовком части песни
+ */
+function isSongSectionHeader(text) {
+  const headerPatterns = [
+    /^(Припев|Chorus)[\.:]?$/i,
+    /^(Куплет|Verse)\s*\d*[\.:]?$/i,
+    /^(Бридж|Bridge)[\.:]?$/i,
+    /^(Вступление|Intro)[\.:]?$/i,
+    /^(Кода|Coda)[\.:]?$/i,
+    /^(Проигрыш|Interlude)[\.:]?$/i,
+    /^(Финал|Outro)[\.:]?$/i
+  ];
+  
+  const trimmedText = text.trim();
+  
+  for (const pattern of headerPatterns) {
+    if (pattern.test(trimmedText)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Преобразует текст песни в HTML с форматированием аккордов и структуры
+ * @param {string} title - Название песни
+ * @param {string} content - Содержимое песни
+ * @returns {string} - HTML-версия песни
+ */
+function formatSongToHTML(title, content) {
+  if (!content) return '';
+  
+  // Экранируем специальные HTML-символы
+  function escapeHTML(text) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+  
+  const escapedTitle = escapeHTML(title);
+  const lines = content.split('\n');
+  
+  // Разбираем текст на информацию об авторе, ритме и основной текст
+  let author = '';
+  let rhythm = '';
+  let notes = '';
+  
+  // Паттерны для метаданных
+  const authorPatterns = [
+    /^(Автор|Музыка|Слова|Муз\.|Сл\.|Автор и музыка)[:\s]+(.+)$/i,
+    /^(Слова и музыка)[:\s]+(.+)$/i,
+    /^.*?(автор|музыка)[:\s]+([^,]+).*/i
+  ];
+  
+  const rhythmPatterns = [
+    /^(Ритм|Ритмика|Бой)[:\s]+(.+)$/i,
+    /^.*?(ритм|ритмика)[:\s]+([^,]+).*/i,
+    /^(Сложный бой|Простой бой|Перебор)$/i
+  ];
+  
+  const notesPatterns = [
+    /^(Примечание|Note|Примеч\.)[:\s]+(.+)$/i,
+    /^.*?(примечание)[:\s]+([^,]+).*/i
+  ];
+  
+  // Ищем метаданные в первых строках
+  const metadataLines = Math.min(10, lines.length);
+  for (let i = 0; i < metadataLines; i++) {
+    const line = lines[i].trim();
+    
+    // Ищем автора
+    if (!author) {
+      for (const pattern of authorPatterns) {
+        const match = line.match(pattern);
+        if (match && match[2]) {
+          author = match[2].trim();
+          lines[i] = ''; // Удаляем эту строку из основного текста
+          break;
+        }
+      }
+    }
+    
+    // Ищем информацию о ритме
+    if (!rhythm) {
+      for (const pattern of rhythmPatterns) {
+        const match = line.match(pattern);
+        if (match) {
+          rhythm = match[2] ? match[2].trim() : match[1].trim();
+          lines[i] = ''; // Удаляем эту строку из основного текста
+          break;
+        }
+      }
+    }
+    
+    // Ищем примечания
+    if (!notes) {
+      for (const pattern of notesPatterns) {
+        const match = line.match(pattern);
+        if (match && match[2]) {
+          notes = match[2].trim();
+          lines[i] = ''; // Удаляем эту строку из основного текста
+          break;
+        }
+      }
+    }
+  }
+  
+  // Создаем HTML песни
+  let html = '<div class="song">\n';
+  html += `<h2 class="song-title">${escapedTitle}</h2>\n`;
+  
+  // Добавляем метаданные, если есть
+  let metadataHTML = '';
+  if (author) {
+    metadataHTML += `<div class="song-author">Автор: ${escapeHTML(author)}</div>\n`;
+  }
+  if (rhythm) {
+    metadataHTML += `<div class="song-rhythm">Ритм: ${escapeHTML(rhythm)}</div>\n`;
+  }
+  if (notes) {
+    metadataHTML += `<div class="song-notes">Примечание: ${escapeHTML(notes)}</div>\n`;
+  }
+  
+  if (metadataHTML) {
+    html += `<div class="song-metadata">\n${metadataHTML}</div>\n`;
+  }
+  
+  // Начинаем основной текст песни
+  html += '<div class="song-content">\n';
+  
+  // Обработка строк текста
+  let inChordSection = false;
+  
+  // Функция для распознавания и разметки аккордов в тексте
+  function markupChords(line) {
+    // Проверяем, содержит ли строка аккорды (обычно краткие группы символов разделенные пробелами)
+    const words = line.split(/\s+/);
+    let hasChords = false;
+    const markedLine = words.map(word => {
+      if (isChord(word)) {
+        hasChords = true;
+        return `<span class="chord">${escapeHTML(word)}</span>`;
+      }
+      return escapeHTML(word);
+    }).join(' ');
+    
+    return { markedLine, hasChords };
+  }
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    
+    // Пропускаем пустые строки или строки, которые мы уже обработали как метаданные
+    if (line === '') {
+      html += '<br>\n';
+      continue;
+    }
+    
+    // Проверяем, является ли строка заголовком секции (припев, куплет и т.д.)
+    if (isSongSectionHeader(line)) {
+      html += `<h3 class="section-header">${escapeHTML(line)}</h3>\n`;
+      continue;
+    }
+    
+    // Обработка строки с потенциальными аккордами
+    const { markedLine, hasChords } = markupChords(line);
+    
+    if (hasChords) {
+      html += `<div class="chord-line">${markedLine}</div>\n`;
+    } else {
+      html += `<p class="lyrics">${escapeHTML(line)}</p>\n`;
+    }
+  }
+  
+  html += '</div>\n'; // Закрываем song-content
+  html += '</div>\n'; // Закрываем song
+  
+  return html;
+}
+
+/**
+ * Отправляет отформатированную песню пользователю с улучшенным форматированием
  * @param {number} chatId - ID чата для отправки
  * @param {string} title - Название песни
  * @param {string} content - Содержимое песни
@@ -1499,13 +1750,39 @@ async function sendFormattedSong(chatId, title, content, isRandom = false) {
     // Добавляем основной текст песни
     messageText += `\n\n${formattedText}`;
     
+    // Выделяем аккорды в тексте (в квадратных скобках или жирным)
+    // Разбиваем на строки
+    const lines = messageText.split('\n');
+    let enhancedMessage = '';
+    
+    for (const line of lines) {
+      if (line.trim() === '') {
+        enhancedMessage += '\n';
+        continue;
+      }
+      
+      // Проверяем наличие аккордов
+      const words = line.split(/\s+/);
+      let hasChords = false;
+      const modifiedLine = words.map(word => {
+        const cleanWord = word.replace(/<\/?[^>]+(>|$)/g, ''); // Убираем HTML-теги для проверки
+        if (isChord(cleanWord)) {
+          hasChords = true;
+          return word.replace(cleanWord, `<b>${cleanWord}</b>`);
+        }
+        return word;
+      }).join(' ');
+      
+      enhancedMessage += modifiedLine + '\n';
+    }
+    
     // Проверяем длину сообщения
-    if (messageText.length > MAX_MESSAGE_LENGTH) {
+    if (enhancedMessage.length > MAX_MESSAGE_LENGTH) {
       // Разбиваем на части и отправляем по частям
-      await sendLongMessage(chatId, messageText);
+      await sendLongMessage(chatId, enhancedMessage);
     } else {
       // Отправляем обычное сообщение
-      await bot.sendMessage(chatId, messageText, {
+      await bot.sendMessage(chatId, enhancedMessage, {
         parse_mode: 'HTML'
       });
     }
@@ -1528,7 +1805,7 @@ async function sendFormattedSong(chatId, title, content, isRandom = false) {
 }
 
 /**
- * Отправляет длинное сообщение, разбивая его на части
+ * Отправляет длинное сообщение, разбивая его на части с сохранением форматирования
  * @param {number} chatId - ID чата для отправки
  * @param {string} text - Длинное сообщение
  */
@@ -1548,28 +1825,50 @@ async function sendLongMessage(chatId, text) {
     let currentPart = '';
     
     // Определяем, является ли первая часть заголовком
-    let firstLines = [];
-    let titleLine = '';
+    let songTitle = '';
+    let songMetadata = [];
+    let foundEmptyLine = false;
     
-    // Ищем заголовок и метаданные (до первой пустой строки)
-    for (let i = 0; i < Math.min(10, lines.length); i++) {
-      if (lines[i].trim() === '') {
-        break;
+    // Ищем заголовок песни и метаданные (до второй пустой строки)
+    for (let i = 0; i < Math.min(15, lines.length); i++) {
+      const line = lines[i].trim();
+      
+      if (line === '') {
+        // Пропускаем первую пустую строку, а на второй прекращаем сбор метаданных
+        if (foundEmptyLine) {
+          break;
+        }
+        foundEmptyLine = true;
+        songMetadata.push('');
+        continue;
       }
       
-      if (i === 0) {
-        titleLine = lines[i];
+      // Первая непустая строка - заголовок
+      if (songTitle === '' && line !== '') {
+        songTitle = line;
+        continue;
       }
       
-      firstLines.push(lines[i]);
+      // Добавляем строку в метаданные (автор, ритм и т.д.)
+      if (line.startsWith('<i>') || i < 5) {
+        songMetadata.push(line);
+      }
     }
     
-    // Собираем заголовок и метаданные
-    const headerText = firstLines.join('\n');
-    currentPart = headerText + '\n\n';
+    // Создаем заголовок для каждой части сообщения
+    let messageHeader = songTitle ? songTitle : '';
+    if (songMetadata.length > 0) {
+      messageHeader += '\n' + songMetadata.join('\n');
+    }
+    
+    // Добавляем заголовок в первую часть
+    currentPart = messageHeader + '\n\n';
+    
+    // Определяем, сколько строк мы уже обработали (заголовок + метаданные)
+    const skipLines = messageHeader.split('\n').length + 2; // +2 для пустых строк
     
     // Проходим по оставшимся строкам и собираем части сообщения
-    for (let i = firstLines.length; i < lines.length; i++) {
+    for (let i = skipLines; i < lines.length; i++) {
       const line = lines[i];
       
       // Проверяем, не будет ли превышен лимит при добавлении строки
@@ -1579,8 +1878,8 @@ async function sendLongMessage(chatId, text) {
           await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
         }
         
-        // Начинаем новую часть (первая часть каждой следующей части - это заголовок)
-        currentPart = titleLine ? `<b>[Продолжение] ${titleLine.replace(/<b>|<\/b>/g, '')}</b>\n\n${line}\n` : line + '\n';
+        // Начинаем новую часть с заголовком [Продолжение]
+        currentPart = `<b>[Продолжение] ${songTitle.replace(/<\/?[^>]+(>|$)/g, '')}</b>\n\n${line}\n`;
       } else {
         // Добавляем строку к текущей части
         currentPart += line + '\n';
