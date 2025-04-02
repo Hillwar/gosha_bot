@@ -51,6 +51,7 @@ bot.onText(/\/help/, handleHelpCommand);
 bot.onText(/\/list/, handleListCommand);
 bot.onText(/\/random/, handleRandomCommand);
 bot.onText(/\/search(?:\s+(.+))?/, handleSearchCommand);
+bot.onText(/\/circlerules/, handleCircleRulesCommand);
 
 // Регистрация обработчика текстовых сообщений
 bot.on('message', msg => { if (msg.text && !msg.text.startsWith('/')) handleTextMessage(msg); });
@@ -388,6 +389,7 @@ async function handleStartCommand(msg) {
     '/search - поиск по названию или тексту\n' +
     '/list - список всех песен\n' +
     '/random - случайная песня\n' +
+    '/circlerules - правила круга\n' +
     '/help - справка';
   
   await bot.sendMessage(msg.chat.id, welcomeMessage);
@@ -604,6 +606,72 @@ async function setupWebhook() {
 function updateStats(userId, command) {
   stats.commandsUsed[command] = (stats.commandsUsed[command] || 0) + 1;
   stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+}
+
+/**
+ * Обработка команды /circlerules - получение правил круга
+ */
+async function handleCircleRulesCommand(msg) {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  
+  try {
+    // Сообщение о загрузке
+    const waitMessage = await bot.sendMessage(chatId, 'Загружаю правила круга...');
+    
+    // Получаем документ
+    const document = await getDocumentContent();
+    let rules = '';
+    let foundRules = false;
+    
+    // Ищем текст до первого символа ♭
+    for (const element of document.body.content) {
+      if (element.paragraph) {
+        const text = extractParagraphText(element.paragraph);
+        
+        if (text.includes('♭')) {
+          // Достигли первого названия песни - останавливаемся
+          foundRules = true;
+          break;
+        }
+        
+        // Добавляем текст к правилам
+        if (text.trim()) {
+          rules += text + '\n\n';
+        }
+      }
+    }
+    
+    // Удаляем сообщение загрузки
+    try {
+      await bot.deleteMessage(chatId, waitMessage.message_id);
+    } catch (error) {
+      console.error('Ошибка удаления сообщения:', error.message);
+    }
+    
+    if (!foundRules || rules.trim().length === 0) {
+      await bot.sendMessage(chatId, 'Правила круга не найдены в документе.');
+      return;
+    }
+    
+    // Форматируем и отправляем правила
+    const escapeHtml = (unsafe) => {
+      if (!unsafe) return '';
+      return unsafe
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    };
+    
+    const formattedRules = '<b>Правила круга</b>\n\n' + escapeHtml(rules.trim());
+    await sendLongMessage(chatId, formattedRules);
+    
+    // Статистика
+    updateStats(userId, '/circlerules');
+  } catch (error) {
+    console.error('Ошибка получения правил круга:', error.message);
+    await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
+  }
 }
 
 // Экспорт модуля (для тестирования)
