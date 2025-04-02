@@ -952,207 +952,146 @@ async function handleHelpCommand(msg) {
   stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
 }
 
-/**
- * Обработка команды /list - получение списка всех песен
- * @param {Object} msg - Сообщение от пользователя
- */
-async function handleListCommand(msg) {
-  const userId = msg.from.id;
-  const userName = msg.from.first_name;
-  
-  logger.info(`User ${userId} (${userName}) requested song list`, {
-    command: '/list',
-    user: {
-      id: userId,
-      name: userName
-    }
-  });
-  
-  try {
-    // Получаем документ
-    const document = await getDocumentContent();
-    
-    if (!document || !document.body || !document.body.content) {
-      throw new Error('Invalid document structure');
-    }
-    
-    // Находим все заголовки (TITLE элементы) в документе
-    const titleElements = document.body.content.filter(item => 
-      item && item.paragraph && 
-      item.paragraph.paragraphStyle && 
-      item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
-      item.paragraph.elements && 
-      item.paragraph.elements[0] && 
-      item.paragraph.elements[0].textRun
-    );
-    
-    if (titleElements.length <= 1) {
-      await bot.sendMessage(msg.chat.id, 'В документе недостаточно песен.');
-      return;
-    }
-    
-    // Всегда пропускаем первый заголовок (правила) и начинаем со второго
-    const songTitles = [];
-    
-    // Начинаем с индекса 1 (второй элемент)
-    for (let i = 1; i < titleElements.length; i++) {
-      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
-      
-      // Дополнительно фильтруем заголовки, которые явно не песни
-      if (title && 
-          !title.includes('Правила') && 
-          !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
-          title !== 'Припев.' && 
-          title !== 'Припев:' &&
-          !title.match(/^Будь осознанным/)) {
-        songTitles.push({ title, page: i + 1 });  // Страница = индекс + 1
-      }
-    }
-    
-    // Если после фильтрации не осталось песен
-    if (songTitles.length === 0) {
-      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации.');
-      return;
-    }
-    
-    logger.info(`Found ${songTitles.length} songs for list command`);
-    
-    // Формируем сообщение с нумерованным списком песен
-    let message = '<b>Список песен:</b>\n\n';
-    
-    // Добавляем все найденные песни с номерами
-    for (let i = 0; i < songTitles.length; i++) {
-      const songNumber = i + 1;
-      const songTitle = songTitles[i].title.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      
-      // Добавляем каждое название отдельной строкой с номером
-      message += `${songNumber}. ${songTitle}\n`;
-      
-      // Если сообщение становится слишком длинным, разбиваем его на части
-      if (message.length > MAX_MESSAGE_LENGTH - 200 && i < songTitles.length - 1) {
-        await bot.sendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
-        message = '<b>Продолжение списка песен:</b>\n\n';
-      }
-    }
-    
-    // Отправляем финальное сообщение (или единственное, если список был коротким)
-    if (message.length > 0) {
-      await bot.sendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
-    }
-    
-    // Регистрируем статистику использования команды
-    stats.commandsUsed['/list'] = (stats.commandsUsed['/list'] || 0) + 1;
-    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
-  } catch (error) {
-    logger.error('Error handling list command:', {
-      error: error.message,
-      stack: error.stack,
-      userId
-    });
-    
-    await bot.sendMessage(msg.chat.id, 'Произошла ошибка при получении списка песен. Пожалуйста, попробуйте позже.');
-  }
-}
+// Функция для отправки сообщения с анимацией загрузки
+const sendLoadingMessage = async (ctx) => {
+  return await ctx.reply('Загрузка...', { parse_mode: 'HTML' });
+};
 
-/**
- * Обработка команды /random - получение случайной песни
- * @param {Object} msg - Сообщение от пользователя
- */
-async function handleRandomCommand(msg) {
-  const userId = msg.from.id;
-  const userName = msg.from.first_name;
-  
-  logger.info(`User ${userId} (${userName}) requested a random song`, {
-    command: '/random',
-    user: {
-      id: userId,
-      name: userName
-    }
-  });
-  
+// Функция для удаления сообщения с анимацией загрузки
+const deleteLoadingMessage = async (ctx, messageId) => {
   try {
-    // Получаем документ
-    const document = await getDocumentContent();
+    await ctx.deleteMessage(messageId);
+  } catch (error) {
+    console.error('Ошибка при удалении сообщения:', error);
+  }
+};
+
+// Функция для обработки команды /list
+bot.command('list', async (ctx) => {
+  try {
+    // Отправка сообщения с анимацией загрузки
+    const loadingMessage = await sendLoadingMessage(ctx);
     
-    if (!document || !document.body || !document.body.content) {
-      throw new Error('Invalid document structure');
-    }
+    // Получаем текст из документа
+    const { text } = await fetchSongbookContent();
     
-    // Находим все заголовки (TITLE элементы) в документе
-    const titleElements = document.body.content.filter(item => 
-      item && item.paragraph && 
-      item.paragraph.paragraphStyle && 
-      item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
-      item.paragraph.elements && 
-      item.paragraph.elements[0] && 
-      item.paragraph.elements[0].textRun
-    );
+    // Разбиваем текст на строки
+    const lines = text.split('\n');
     
-    if (titleElements.length <= 1) {
-      await bot.sendMessage(msg.chat.id, 'В документе недостаточно песен.');
-      return;
-    }
+    // Ищем песни по символу ♭
+    const songTitles = [];
+    let songTitle = '';
+    let songAuthor = '';
     
-    // Всегда пропускаем первый заголовок (правила) и начинаем со второго
-    const songs = [];
-    
-    // Начинаем с индекса 1 (второй элемент)
-    for (let i = 1; i < titleElements.length; i++) {
-      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
       
-      // Дополнительно фильтруем заголовки, которые явно не песни
-      if (title && 
-          !title.includes('Правила') && 
-          !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
-          title !== 'Припев.' && 
-          title !== 'Припев:' &&
-          !title.match(/^Будь осознанным/)) {
-        songs.push({ title, page: i + 1 });  // Страница = индекс + 1
+      if (line.startsWith('♭')) {
+        // Нашли название песни (без символа ♭)
+        songTitle = line.substring(1).trim();
+        
+        // Попытка получить автора из следующей строки
+        if (i + 1 < lines.length) {
+          songAuthor = lines[i + 1].trim();
+          
+          // Добавляем песню и автора в список
+          songTitles.push(`${songTitle} — ${songAuthor}`);
+        } else {
+          // Если нет строки автора, добавляем только название
+          songTitles.push(songTitle);
+        }
       }
     }
     
-    // Если после фильтрации не осталось песен
+    // Удаляем сообщение с анимацией загрузки
+    await deleteLoadingMessage(ctx, loadingMessage.message_id);
+    
+    // Проверяем, есть ли песни
+    if (songTitles.length === 0) {
+      await ctx.reply('Песни не найдены.');
+      return;
+    }
+    
+    // Отправляем список песен в чат
+    await ctx.reply(`Список песен в аккорднике (${songTitles.length}):\n\n${songTitles.join('\n')}`);
+  } catch (error) {
+    console.error('Ошибка при обработке команды /list:', error);
+    await ctx.reply('Произошла ошибка при получении списка песен.');
+  }
+});
+
+// Функция для обработки команды /random
+bot.command('random', async (ctx) => {
+  try {
+    // Отправка сообщения с анимацией загрузки
+    const loadingMessage = await sendLoadingMessage(ctx);
+    
+    // Получаем текст из документа
+    const { text } = await fetchSongbookContent();
+    
+    // Разбиваем текст на строки
+    const lines = text.split('\n');
+    
+    // Ищем песни по символу ♭
+    const songs = [];
+    let currentSongStartIndex = -1;
+    let currentSongTitle = '';
+    let currentSongAuthor = '';
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      if (line.startsWith('♭')) {
+        // Если нашли предыдущую песню, сохраняем её
+        if (currentSongStartIndex !== -1) {
+          const songContent = lines.slice(currentSongStartIndex, i).join('\n');
+          songs.push({
+            title: currentSongTitle,
+            author: currentSongAuthor,
+            content: songContent
+          });
+        }
+        
+        // Запоминаем новую песню
+        currentSongTitle = line.substring(1).trim();
+        
+        // Попытка получить автора из следующей строки
+        if (i + 1 < lines.length) {
+          currentSongAuthor = lines[i + 1].trim();
+          currentSongStartIndex = i;  // Запоминаем индекс начала песни
+        }
+      }
+    }
+    
+    // Добавляем последнюю песню
+    if (currentSongStartIndex !== -1) {
+      const songContent = lines.slice(currentSongStartIndex).join('\n');
+      songs.push({
+        title: currentSongTitle,
+        author: currentSongAuthor,
+        content: songContent
+      });
+    }
+    
+    // Удаляем сообщение с анимацией загрузки
+    await deleteLoadingMessage(ctx, loadingMessage.message_id);
+    
+    // Проверяем, есть ли песни
     if (songs.length === 0) {
-      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации.');
+      await ctx.reply('Песни не найдены.');
       return;
     }
     
     // Выбираем случайную песню
-    const randomIndex = Math.floor(Math.random() * songs.length);
-    const randomSong = songs[randomIndex];
+    const randomSong = songs[Math.floor(Math.random() * songs.length)];
     
-    // Получаем содержимое случайной песни
-    const documentId = getDocumentIdFromUrl(process.env.SONGBOOK_URL);
-    const songContent = await getSongContent(documentId, randomSong.page);
-    
-    if (!songContent) {
-      await bot.sendMessage(
-        msg.chat.id, 
-        `К сожалению, не удалось загрузить выбранную песню (${randomSong.title}). Пожалуйста, попробуйте еще раз.`
-      );
-      return;
-    }
-    
-    // Сохраняем последнюю песню в состоянии пользователя
-    userStates.set(userId, userStates.get(userId) || {});
-    userStates.get(userId).lastSongPage = randomSong.page;
-    
-    // Отправляем песню пользователю
-    await sendFormattedSong(msg.chat.id, randomSong.title, songContent, true);
-    
-    // Регистрируем статистику использования команды
-    stats.commandsUsed['/random'] = (stats.commandsUsed['/random'] || 0) + 1;
-    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+    // Отправляем случайную песню в чат
+    await ctx.reply(`${randomSong.title}\n${randomSong.author}\n\n${randomSong.content}`);
   } catch (error) {
-    logger.error('Error handling random command:', {
-      error: error.message,
-      stack: error.stack,
-      userId
-    });
-    
-    await bot.sendMessage(msg.chat.id, 'Произошла ошибка при получении случайной песни. Пожалуйста, попробуйте позже.');
+    console.error('Ошибка при обработке команды /random:', error);
+    await ctx.reply('Произошла ошибка при получении случайной песни.');
   }
-}
+});
 
 /**
  * Обработка команды /search - поиск песни по названию
@@ -1471,238 +1410,7 @@ async function handleCallbackQuery(callback) {
 }
 
 /**
- * Анализирует текстовый элемент для определения, является ли он аккордом
- * @param {string} text - Текст для проверки
- * @return {boolean} - true, если текст похож на аккорд
- */
-function isChord(text) {
-  // Паттерны для распознавания аккордов (основные)
-  const chordPatterns = [
-    /^[ABCDEFGH][m]?$/,  // Базовые аккорды: A, Am, C, Cm, и т.д.
-    /^[ABCDEFGH][m]?(7|9|11|13|maj7|min7|sus2|sus4|dim|aug)?$/,  // С добавлением 7, maj7, и т.д.
-    /^[ABCDEFGH][m]?[\/#][ABCDEFGH]$/,  // Аккорды с басом: A/G, C/G, и т.д.
-    /^[ABCDEFGH][#b]?[m]?$/  // Аккорды с диезами/бемолями: A#, Bb, F#m, и т.д.
-  ];
-
-  // Типичные названия аккордов вручную для проверки
-  const commonChords = [
-    'A', 'Am', 'A7', 'Amaj7', 'Am7', 'Asus', 'Asus4', 'A/E',
-    'B', 'Bm', 'B7', 'Bmaj7', 'Bm7', 'Bsus', 'Bsus4', 'B/F#',
-    'C', 'Cm', 'C7', 'Cmaj7', 'Cm7', 'Csus', 'Csus4', 'C/G',
-    'D', 'Dm', 'D7', 'Dmaj7', 'Dm7', 'Dsus', 'Dsus4', 'D/A',
-    'E', 'Em', 'E7', 'Emaj7', 'Em7', 'Esus', 'Esus4', 'E/B',
-    'F', 'Fm', 'F7', 'Fmaj7', 'Fm7', 'Fsus', 'Fsus4', 'F/C',
-    'G', 'Gm', 'G7', 'Gmaj7', 'Gm7', 'Gsus', 'Gsus4', 'G/D',
-    'A#', 'A#m', 'Bb', 'Bbm', 'C#', 'C#m', 'Db', 'Dbm',
-    'D#', 'D#m', 'Eb', 'Ebm', 'F#', 'F#m', 'Gb', 'Gbm',
-    'G#', 'G#m', 'Ab', 'Abm'
-  ];
-
-  // Проверяем, соответствует ли текст одному из паттернов или является известным аккордом
-  const trimmedText = text.trim();
-  
-  // Прямое совпадение со списком
-  if (commonChords.includes(trimmedText)) {
-    return true;
-  }
-  
-  // Проверка по регулярным выражениям
-  for (const pattern of chordPatterns) {
-    if (pattern.test(trimmedText)) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-/**
- * Определяет, является ли строка заголовком части песни (припев, куплет и т.д.)
- * @param {string} text - Текст для проверки
- * @return {boolean} - true, если текст является заголовком части песни
- */
-function isSongSectionHeader(text) {
-  const headerPatterns = [
-    /^(Припев|Chorus)[\.:]?$/i,
-    /^(Куплет|Verse)\s*\d*[\.:]?$/i,
-    /^(Бридж|Bridge)[\.:]?$/i,
-    /^(Вступление|Intro)[\.:]?$/i,
-    /^(Кода|Coda)[\.:]?$/i,
-    /^(Проигрыш|Interlude)[\.:]?$/i,
-    /^(Финал|Outro)[\.:]?$/i
-  ];
-  
-  const trimmedText = text.trim();
-  
-  for (const pattern of headerPatterns) {
-    if (pattern.test(trimmedText)) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-/**
- * Преобразует текст песни в HTML с форматированием аккордов и структуры
- * @param {string} title - Название песни
- * @param {string} content - Содержимое песни
- * @returns {string} - HTML-версия песни
- */
-function formatSongToHTML(title, content) {
-  if (!content) return '';
-  
-  // Экранируем специальные HTML-символы
-  function escapeHTML(text) {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-  
-  const escapedTitle = escapeHTML(title);
-  const lines = content.split('\n');
-  
-  // Разбираем текст на информацию об авторе, ритме и основной текст
-  let author = '';
-  let rhythm = '';
-  let notes = '';
-  
-  // Паттерны для метаданных
-  const authorPatterns = [
-    /^(Автор|Музыка|Слова|Муз\.|Сл\.|Автор и музыка)[:\s]+(.+)$/i,
-    /^(Слова и музыка)[:\s]+(.+)$/i,
-    /^.*?(автор|музыка)[:\s]+([^,]+).*/i
-  ];
-  
-  const rhythmPatterns = [
-    /^(Ритм|Ритмика|Бой)[:\s]+(.+)$/i,
-    /^.*?(ритм|ритмика)[:\s]+([^,]+).*/i,
-    /^(Сложный бой|Простой бой|Перебор)$/i
-  ];
-  
-  const notesPatterns = [
-    /^(Примечание|Note|Примеч\.)[:\s]+(.+)$/i,
-    /^.*?(примечание)[:\s]+([^,]+).*/i
-  ];
-  
-  // Ищем метаданные в первых строках
-  const metadataLines = Math.min(10, lines.length);
-  for (let i = 0; i < metadataLines; i++) {
-    const line = lines[i].trim();
-    
-    // Ищем автора
-    if (!author) {
-      for (const pattern of authorPatterns) {
-        const match = line.match(pattern);
-        if (match && match[2]) {
-          author = match[2].trim();
-          lines[i] = ''; // Удаляем эту строку из основного текста
-          break;
-        }
-      }
-    }
-    
-    // Ищем информацию о ритме
-    if (!rhythm) {
-      for (const pattern of rhythmPatterns) {
-        const match = line.match(pattern);
-        if (match) {
-          rhythm = match[2] ? match[2].trim() : match[1].trim();
-          lines[i] = ''; // Удаляем эту строку из основного текста
-          break;
-        }
-      }
-    }
-    
-    // Ищем примечания
-    if (!notes) {
-      for (const pattern of notesPatterns) {
-        const match = line.match(pattern);
-        if (match && match[2]) {
-          notes = match[2].trim();
-          lines[i] = ''; // Удаляем эту строку из основного текста
-          break;
-        }
-      }
-    }
-  }
-  
-  // Создаем HTML песни
-  let html = '<div class="song">\n';
-  html += `<h2 class="song-title">${escapedTitle}</h2>\n`;
-  
-  // Добавляем метаданные, если есть
-  let metadataHTML = '';
-  if (author) {
-    metadataHTML += `<div class="song-author">Автор: ${escapeHTML(author)}</div>\n`;
-  }
-  if (rhythm) {
-    metadataHTML += `<div class="song-rhythm">Ритм: ${escapeHTML(rhythm)}</div>\n`;
-  }
-  if (notes) {
-    metadataHTML += `<div class="song-notes">Примечание: ${escapeHTML(notes)}</div>\n`;
-  }
-  
-  if (metadataHTML) {
-    html += `<div class="song-metadata">\n${metadataHTML}</div>\n`;
-  }
-  
-  // Начинаем основной текст песни
-  html += '<div class="song-content">\n';
-  
-  // Обработка строк текста
-  let inChordSection = false;
-  
-  // Функция для распознавания и разметки аккордов в тексте
-  function markupChords(line) {
-    // Проверяем, содержит ли строка аккорды (обычно краткие группы символов разделенные пробелами)
-    const words = line.split(/\s+/);
-    let hasChords = false;
-    const markedLine = words.map(word => {
-      if (isChord(word)) {
-        hasChords = true;
-        return `<span class="chord">${escapeHTML(word)}</span>`;
-      }
-      return escapeHTML(word);
-    }).join(' ');
-    
-    return { markedLine, hasChords };
-  }
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    
-    // Пропускаем пустые строки или строки, которые мы уже обработали как метаданные
-    if (line === '') {
-      html += '<br>\n';
-      continue;
-    }
-    
-    // Проверяем, является ли строка заголовком секции (припев, куплет и т.д.)
-    if (isSongSectionHeader(line)) {
-      html += `<h3 class="section-header">${escapeHTML(line)}</h3>\n`;
-      continue;
-    }
-    
-    // Обработка строки с потенциальными аккордами
-    const { markedLine, hasChords } = markupChords(line);
-    
-    if (hasChords) {
-      html += `<div class="chord-line">${markedLine}</div>\n`;
-    } else {
-      html += `<p class="lyrics">${escapeHTML(line)}</p>\n`;
-    }
-  }
-  
-  html += '</div>\n'; // Закрываем song-content
-  html += '</div>\n'; // Закрываем song
-  
-  return html;
-}
-
-/**
- * Отправляет отформатированную песню пользователю с улучшенным форматированием
+ * Отправляет отформатированную песню пользователю
  * @param {number} chatId - ID чата для отправки
  * @param {string} title - Название песни
  * @param {string} content - Содержимое песни
@@ -1750,39 +1458,13 @@ async function sendFormattedSong(chatId, title, content, isRandom = false) {
     // Добавляем основной текст песни
     messageText += `\n\n${formattedText}`;
     
-    // Выделяем аккорды в тексте (в квадратных скобках или жирным)
-    // Разбиваем на строки
-    const lines = messageText.split('\n');
-    let enhancedMessage = '';
-    
-    for (const line of lines) {
-      if (line.trim() === '') {
-        enhancedMessage += '\n';
-        continue;
-      }
-      
-      // Проверяем наличие аккордов
-      const words = line.split(/\s+/);
-      let hasChords = false;
-      const modifiedLine = words.map(word => {
-        const cleanWord = word.replace(/<\/?[^>]+(>|$)/g, ''); // Убираем HTML-теги для проверки
-        if (isChord(cleanWord)) {
-          hasChords = true;
-          return word.replace(cleanWord, `<b>${cleanWord}</b>`);
-        }
-        return word;
-      }).join(' ');
-      
-      enhancedMessage += modifiedLine + '\n';
-    }
-    
     // Проверяем длину сообщения
-    if (enhancedMessage.length > MAX_MESSAGE_LENGTH) {
+    if (messageText.length > MAX_MESSAGE_LENGTH) {
       // Разбиваем на части и отправляем по частям
-      await sendLongMessage(chatId, enhancedMessage);
+      await sendLongMessage(chatId, messageText);
     } else {
       // Отправляем обычное сообщение
-      await bot.sendMessage(chatId, enhancedMessage, {
+      await bot.sendMessage(chatId, messageText, {
         parse_mode: 'HTML'
       });
     }
@@ -1805,7 +1487,7 @@ async function sendFormattedSong(chatId, title, content, isRandom = false) {
 }
 
 /**
- * Отправляет длинное сообщение, разбивая его на части с сохранением форматирования
+ * Отправляет длинное сообщение, разбивая его на части
  * @param {number} chatId - ID чата для отправки
  * @param {string} text - Длинное сообщение
  */
@@ -1825,50 +1507,28 @@ async function sendLongMessage(chatId, text) {
     let currentPart = '';
     
     // Определяем, является ли первая часть заголовком
-    let songTitle = '';
-    let songMetadata = [];
-    let foundEmptyLine = false;
+    let firstLines = [];
+    let titleLine = '';
     
-    // Ищем заголовок песни и метаданные (до второй пустой строки)
-    for (let i = 0; i < Math.min(15, lines.length); i++) {
-      const line = lines[i].trim();
-      
-      if (line === '') {
-        // Пропускаем первую пустую строку, а на второй прекращаем сбор метаданных
-        if (foundEmptyLine) {
-          break;
-        }
-        foundEmptyLine = true;
-        songMetadata.push('');
-        continue;
+    // Ищем заголовок и метаданные (до первой пустой строки)
+    for (let i = 0; i < Math.min(10, lines.length); i++) {
+      if (lines[i].trim() === '') {
+        break;
       }
       
-      // Первая непустая строка - заголовок
-      if (songTitle === '' && line !== '') {
-        songTitle = line;
-        continue;
+      if (i === 0) {
+        titleLine = lines[i];
       }
       
-      // Добавляем строку в метаданные (автор, ритм и т.д.)
-      if (line.startsWith('<i>') || i < 5) {
-        songMetadata.push(line);
-      }
+      firstLines.push(lines[i]);
     }
     
-    // Создаем заголовок для каждой части сообщения
-    let messageHeader = songTitle ? songTitle : '';
-    if (songMetadata.length > 0) {
-      messageHeader += '\n' + songMetadata.join('\n');
-    }
-    
-    // Добавляем заголовок в первую часть
-    currentPart = messageHeader + '\n\n';
-    
-    // Определяем, сколько строк мы уже обработали (заголовок + метаданные)
-    const skipLines = messageHeader.split('\n').length + 2; // +2 для пустых строк
+    // Собираем заголовок и метаданные
+    const headerText = firstLines.join('\n');
+    currentPart = headerText + '\n\n';
     
     // Проходим по оставшимся строкам и собираем части сообщения
-    for (let i = skipLines; i < lines.length; i++) {
+    for (let i = firstLines.length; i < lines.length; i++) {
       const line = lines[i];
       
       // Проверяем, не будет ли превышен лимит при добавлении строки
@@ -1878,8 +1538,8 @@ async function sendLongMessage(chatId, text) {
           await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
         }
         
-        // Начинаем новую часть с заголовком [Продолжение]
-        currentPart = `<b>[Продолжение] ${songTitle.replace(/<\/?[^>]+(>|$)/g, '')}</b>\n\n${line}\n`;
+        // Начинаем новую часть (первая часть каждой следующей части - это заголовок)
+        currentPart = titleLine ? `<b>[Продолжение] ${titleLine.replace(/<b>|<\/b>/g, '')}</b>\n\n${line}\n` : line + '\n';
       } else {
         // Добавляем строку к текущей части
         currentPart += line + '\n';
@@ -1979,3 +1639,89 @@ app.post('/api/webhook', (req, res) => {
     res.sendStatus(500);
   }
 });
+
+/**
+ * Получение содержимого документа в текстовом формате
+ * @returns {Promise<Object>} Объект с текстовым содержимым документа
+ */
+async function fetchSongbookContent() {
+  try {
+    // Получаем документ через Google Docs API
+    const document = await getDocumentContent();
+    
+    if (!document || !document.body || !document.body.content) {
+      throw new Error('Invalid document structure');
+    }
+    
+    // Преобразуем документ в текстовый формат
+    let text = '';
+    
+    // Итерируемся по всем элементам документа
+    for (const element of document.body.content) {
+      if (element.paragraph) {
+        // Если это параграф с текстом
+        if (element.paragraph.elements) {
+          for (const textElement of element.paragraph.elements) {
+            if (textElement.textRun && textElement.textRun.content) {
+              text += textElement.textRun.content;
+            }
+          }
+        }
+        
+        // Проверяем, имеет ли параграф стиль заголовка (TITLE)
+        if (element.paragraph.paragraphStyle && 
+            element.paragraph.paragraphStyle.namedStyleType === 'TITLE') {
+          // Добавляем символ ♭ перед заголовком для обозначения песни
+          // Но только если это не правила орлятского круга
+          const title = element.paragraph.elements && 
+                       element.paragraph.elements[0] && 
+                       element.paragraph.elements[0].textRun ?
+                       element.paragraph.elements[0].textRun.content.trim() : '';
+          
+          // Проверяем, что это не правила
+          if (title && 
+              !title.includes('Правила') && 
+              !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
+              title !== 'Припев.' && 
+              title !== 'Припев:' &&
+              !title.match(/^Будь осознанным/) &&
+              !title.includes('песенная служба')) {
+            // Ищем последний символ новой строки и заменяем его на новую строку + символ ♭
+            const lastIndex = text.lastIndexOf('\n');
+            if (lastIndex !== -1) {
+              text = text.substring(0, lastIndex) + '\n♭' + text.substring(lastIndex + 1);
+            }
+          }
+        }
+      } else if (element.table) {
+        // Если это таблица, добавляем её содержимое
+        if (element.table.tableRows) {
+          for (const row of element.table.tableRows) {
+            if (row.tableCells) {
+              for (const cell of row.tableCells) {
+                if (cell.content) {
+                  for (const cellElement of cell.content) {
+                    if (cellElement.paragraph && cellElement.paragraph.elements) {
+                      for (const textElement of cellElement.paragraph.elements) {
+                        if (textElement.textRun && textElement.textRun.content) {
+                          text += textElement.textRun.content;
+                        }
+                      }
+                    }
+                  }
+                }
+                text += '\t'; // Добавляем табуляцию между ячейками
+              }
+              text += '\n'; // Добавляем новую строку после каждой строки таблицы
+            }
+          }
+        }
+      }
+    }
+    
+    return { text };
+  } catch (error) {
+    console.error('Error fetching songbook content:', error);
+    throw error;
+  }
+}
