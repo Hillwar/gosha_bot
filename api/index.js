@@ -425,312 +425,6 @@ async function getDocumentContent() {
 }
 
 /**
- * Получает содержимое песни по номеру страницы
- * @param {string} documentId - ID документа Google Docs
- * @param {number} pageNumber - Номер страницы/песни
- * @returns {Promise<string|null>} - Текст песни или null при ошибке
- */
-async function getSongContent(documentId, pageNumber) {
-  try {
-    const document = await getDocumentContent();
-    
-    if (!document || !document.body || !document.body.content) {
-      logger.error('Document structure is invalid for getSongContent');
-      throw new Error('Invalid document structure');
-    }
-    
-    // Начинаем со второй страницы (пропускаем правила)
-    let currentPage = 2;
-    let foundSong = false;
-    let title = '';
-    let paragraphContent = [];
-    
-    for (const element of document.body.content) {
-      if (element && element.paragraph) {
-        const paragraphStyle = element.paragraph.paragraphStyle;
-        const paragraphElements = element.paragraph.elements;
-        
-        // Если это заголовок (начало новой песни)
-        if (paragraphStyle && paragraphStyle.namedStyleType === 'TITLE' && paragraphElements && paragraphElements[0]) {
-          // Если мы уже нашли нужную песню и наткнулись на следующий заголовок, 
-          // значит дошли до конца песни и можем выходить из цикла
-          if (foundSong) {
-            break;
-          }
-          
-          // Если это нужная нам страница, начинаем собирать текст песни
-          if (currentPage === pageNumber) {
-            foundSong = true;
-            const titleText = paragraphElements[0].textRun ? paragraphElements[0].textRun.content.trim() : '';
-            title = titleText;
-            
-            // Сохраняем заголовок в структуру данных
-            paragraphContent.push({
-              type: 'title',
-              text: titleText
-            });
-          }
-          
-          // Увеличиваем счетчик страниц на каждом заголовке
-          currentPage++;
-        } 
-        // Если это не заголовок и мы уже нашли нужную песню
-        else if (foundSong && paragraphElements) {
-          let isParagraphHeader = false;
-          
-          // Проверяем, содержит ли параграф ключевые слова, указывающие на заголовок раздела песни
-          const headerKeywords = ['припев', 'chorus', 'куплет', 'verse', 'бридж', 'bridge'];
-          let paragraphText = '';
-          
-          // Собираем текст из всех элементов параграфа
-          for (const paraElement of paragraphElements) {
-            if (paraElement.textRun) {
-              paragraphText += paraElement.textRun.content;
-            }
-          }
-          
-          paragraphText = paragraphText.trim();
-          
-          // Проверяем, является ли это заголовком (например, "Припев:", "Chorus:" и т.д.)
-          for (const keyword of headerKeywords) {
-            if (paragraphText.toLowerCase().includes(keyword.toLowerCase() + ':') || 
-                paragraphText.toLowerCase().includes(keyword.toLowerCase() + '.')) {
-              isParagraphHeader = true;
-              break;
-            }
-          }
-          
-          // Определяем тип параграфа и добавляем его в структуру
-          if (isParagraphHeader) {
-            paragraphContent.push({
-              type: 'header',
-              text: paragraphText
-            });
-          } else if (paragraphText.trim() !== '') {
-            // Добавляем текст, только если он не пустой
-            paragraphContent.push({
-              type: 'text',
-              text: paragraphText
-            });
-          }
-        }
-      }
-    }
-    
-    // Если песня не найдена, выбрасываем ошибку
-    if (!foundSong) {
-      logger.error(`Song with page number ${pageNumber} not found`);
-      throw new Error(`Song with page number ${pageNumber} not found`);
-    }
-    
-    // Форматируем структуру песни в текст
-    const songText = formatSongTextStructure(paragraphContent);
-    
-    // Для аналитики
-    stats.songViews[title] = (stats.songViews[title] || 0) + 1;
-    
-    return songText;
-  } catch (error) {
-    logger.error('Error getting song content:', {
-      error: error.message,
-      documentId,
-      pageNumber
-    });
-    return null;
-  }
-}
-
-/**
- * Форматирует структурированную песню в текст
- * @param {Array} paragraphs - Массив параграфов с типами и текстом
- * @returns {string} - Отформатированный текст песни
- */
-function formatSongTextStructure(paragraphs) {
-  if (!paragraphs || paragraphs.length === 0) return '';
-  
-  let result = '';
-  let currentSection = null;
-  
-  for (let i = 0; i < paragraphs.length; i++) {
-    const para = paragraphs[i];
-    
-    if (para.type === 'title') {
-      // Добавляем название песни
-      result += para.text + '\n\n';
-      currentSection = 'title';
-    } 
-    else if (para.type === 'header') {
-      // Перед заголовком куплета добавляем пустую строку, если еще не было заголовка
-      if (currentSection && currentSection !== 'title') {
-        result += '\n';
-      }
-      result += para.text + '\n';
-      currentSection = 'header';
-    } 
-    else if (para.type === 'text') {
-      // Обычный текст просто добавляем
-      result += para.text + '\n';
-      currentSection = 'text';
-    }
-  }
-  
-  return result.trim();
-}
-
-/**
- * Экранирует HTML-специальные символы для корректного отображения
- * @param {string} text - Исходный текст
- * @returns {string} - Текст с экранированными HTML-символами
- */
-function formatSongForDisplay(text) {
-  if (!text) return '';
-  
-  // Экранируем HTML-символы для корректного отображения
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-/**
- * Извлекает метаданные из текста песни
- * @param {string} text - Текст песни
- * @returns {Object} - Объект с метаданными песни
- */
-function extractSongInfo(text) {
-  const info = {
-    author: null,
-    rhythm: null,
-    notes: null,
-    cleanText: ''
-  };
-  
-  // Если текст не предоставлен, возвращаем пустую информацию
-  if (!text) return info;
-  
-  const lines = text.split('\n');
-  
-  // Расширенные регулярные выражения для поиска метаданных
-  const authorRegexes = [
-    /^(Автор|Музыка|Слова|Муз\.|Сл\.|Автор и музыка)[:\s]+(.+)$/i,
-    /^(Слова и музыка)[:\s]+(.+)$/i,
-    /^.*?(автор|музыка)[:\s]+([^,]+).*/i
-  ];
-  
-  const rhythmRegexes = [
-    /^(Ритм|Ритмика|Бой)[:\s]+(.+)$/i,
-    /^.*?(ритм|ритмика)[:\s]+([^,]+).*/i,
-    /^(Сложный бой|Простой бой|Перебор)$/i
-  ];
-  
-  const notesRegexes = [
-    /^(Примечание|Note|Примеч\.)[:\s]+(.+)$/i,
-    /^.*?(примечание)[:\s]+([^,]+).*/i
-  ];
-  
-  // Дополнительно ищем строки с "Слова и музыка" или другими форматами указания авторства
-  const titleAuthorRegex = /^(.+)\s+\((.+)\)$/;
-  
-  // Сохраняем метаданные и текст песни отдельно
-  const songLines = [];
-  let inMetaSection = true;
-  let skipFirstLine = true; // Пропускаем первую строку, т.к. это название песни
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    
-    // Пропускаем первую строку (название)
-    if (skipFirstLine) {
-      skipFirstLine = false;
-      continue;
-    }
-    
-    // Проверяем на совпадение с форматом "Название (Автор)"
-    if (i === 0 && titleAuthorRegex.test(line)) {
-      const match = line.match(titleAuthorRegex);
-      if (match && match[2]) {
-        info.author = match[2].trim();
-      }
-      continue;
-    }
-    
-    // Проверяем на совпадение с шаблонами автора
-    let isAuthor = false;
-    for (const regex of authorRegexes) {
-      const match = line.match(regex);
-      if (match && match[2]) {
-        info.author = match[2].trim();
-        isAuthor = true;
-        break;
-      }
-    }
-    if (isAuthor) continue;
-    
-    // Проверяем на совпадение с шаблонами ритма
-    let isRhythm = false;
-    for (const regex of rhythmRegexes) {
-      const match = line.match(regex);
-      if (match) {
-        if (match[2]) {
-          info.rhythm = match[2].trim();
-        } else if (match[1]) {
-          info.rhythm = match[1].trim();
-        }
-        isRhythm = true;
-        break;
-      }
-    }
-    if (isRhythm) continue;
-    
-    // Проверяем на совпадение с шаблонами примечаний
-    let isNote = false;
-    for (const regex of notesRegexes) {
-      const match = line.match(regex);
-      if (match && match[2]) {
-        info.notes = match[2].trim();
-        isNote = true;
-        break;
-      }
-    }
-    if (isNote) continue;
-    
-    // Если встретили строку с текстом песни после метаданных, 
-    // значит метаданные закончились
-    if (inMetaSection && line) {
-      inMetaSection = false;
-    }
-    
-    // Если это не метаданные, добавляем в текст песни
-    songLines.push(lines[i]);
-  }
-  
-  // Проверяем наличие информации об авторе в первых строках
-  if (!info.author) {
-    // Ищем во всех строках упоминания об авторе
-    for (let i = 0; i < Math.min(5, songLines.length); i++) {
-      const line = songLines[i].trim();
-      
-      // Поиск строк вида "Автор: Ю. Устинова" или похожих форматов
-      for (const regex of authorRegexes) {
-        const match = line.match(regex);
-        if (match && match[2]) {
-          info.author = match[2].trim();
-          // Удаляем эту строку из текста песни
-          songLines.splice(i, 1);
-          break;
-        }
-      }
-      
-      if (info.author) break;
-    }
-  }
-  
-  // Собираем текст песни, сохраняя все переносы строк
-  info.cleanText = songLines.join('\n');
-  return info;
-}
-
-/**
  * Поиск песен по названию или тексту
  * @param {string} query - Поисковый запрос
  * @param {boolean} searchByText - Флаг поиска по тексту (если false - по названию)
@@ -1221,7 +915,7 @@ async function sendFormattedSong(chatId, title, content, isRandom = false) {
     const songInfo = extractSongInfo(content);
     
     // Форматируем текст песни для отображения
-    const formattedText = formatSongForDisplay(content);
+    const formattedText = formatSongForDisplay(title, songInfo.author, songInfo.cleanText);
     
     // Определяем текст сообщения
     let messageText = '';
@@ -1740,4 +1434,45 @@ function formatSongForDisplay(title, author, text) {
   result += text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   
   return result;
+}
+
+/**
+ * Отправляет информацию о последней просмотренной песне
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleLastCommand(msg) {
+  const userId = msg.from.id;
+  const userState = userStates.get(userId);
+  
+  if (!userState || !userState.lastSongTitle) {
+    await bot.sendMessage(msg.chat.id, 'У вас еще нет последней просмотренной песни. Используйте команды /list, /random или /search для поиска песен.');
+    return;
+  }
+  
+  try {
+    // Ищем последнюю просмотренную песню
+    const { songs } = await fetchSongbookContent();
+    const lastSong = songs.find(s => s.title === userState.lastSongTitle);
+    
+    if (!lastSong) {
+      await bot.sendMessage(msg.chat.id, 'К сожалению, не удалось найти последнюю просмотренную песню. Возможно, структура документа изменилась.');
+      return;
+    }
+    
+    // Форматируем песню и отправляем пользователю
+    const formattedText = formatSongForDisplay(lastSong.title, lastSong.author, lastSong.fullText);
+    await sendFormattedSong(msg.chat.id, formattedText);
+    
+    // Обновляем статистику
+    stats.commandsUsed['/last'] = (stats.commandsUsed['/last'] || 0) + 1;
+    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+  } catch (error) {
+    logger.error('Error sending last song:', {
+      error: error.message,
+      stack: error.stack,
+      userId
+    });
+    
+    await bot.sendMessage(msg.chat.id, 'Произошла ошибка при получении последней песни. Пожалуйста, попробуйте позже.');
+  }
 }
