@@ -877,12 +877,8 @@ async function handleListCommand(msg) {
       const songNumber = i + 1;
       const song = filteredSongs[i];
       
-      // Форматируем строку с названием и автором
-      if (song.author && song.author.trim()) {
-        message += `${songNumber}. ${song.title} — ${song.author}\n`;
-      } else {
-        message += `${songNumber}. ${song.title}\n`;
-      }
+      // Выводим только название песни без дополнительной информации
+      message += `${songNumber}. ${song.title}\n`;
       
       // Разбиваем на части при необходимости
       if (message.length > MAX_MESSAGE_LENGTH - 200 && i < filteredSongs.length - 1) {
