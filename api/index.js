@@ -87,21 +87,20 @@ async function getSongs() {
     
     for (const element of document.body.content) {
       if (element.paragraph) {
-        const paragraphText = extractParagraphText(element.paragraph);
+        const { text, isSongTitle } = extractParagraphText(element.paragraph);
         
-        if (paragraphText.includes('♭')) {
+        if (isSongTitle) {
           if (currentSong) songs.push(currentSong);
-          const cleanTitle = paragraphText.replace(/[#♭]/g, '').trim();
-          currentSong = { title: cleanTitle, author: '', fullText: paragraphText + '\n' };
+          currentSong = { title: text.trim(), author: '', fullText: text + '\n' };
         } 
         else if (currentSong && !currentSong.author && 
-                (paragraphText.includes('Слова') || paragraphText.includes('Музыка') || 
-                 paragraphText.includes('автор'))) {
-          currentSong.author = paragraphText.trim();
-          currentSong.fullText += paragraphText + '\n';
+                (text.includes('Слова') || text.includes('Музыка') || 
+                 text.includes('автор'))) {
+          currentSong.author = text.trim();
+          currentSong.fullText += text + '\n';
         }
         else if (currentSong) {
-          currentSong.fullText += paragraphText + '\n';
+          currentSong.fullText += text + '\n';
         }
       }
     }
@@ -159,20 +158,17 @@ function extractParagraphText(paragraph) {
     }
   }
   
-  // Добавляем маркер для заголовков песен
-  if (paragraph.paragraphStyle && paragraph.paragraphStyle.namedStyleType === 'TITLE') {
-    const title = text.trim();
-    if (title && 
-        !title.includes('Правила') && 
-        !title.match(/^\d+\./) && 
-        !title.includes('Припев') &&
-        !title.includes('Будь осознанным') &&
-        !title.includes('песенная служба')) {
-      text = '# ♭' + text;
-    }
-  }
+  // Определяем, является ли параграф заголовком песни
+  const isSongTitle = paragraph.paragraphStyle && 
+                      paragraph.paragraphStyle.namedStyleType === 'TITLE' && 
+                      text.trim() && 
+                      !text.includes('Правила') && 
+                      !text.match(/^\d+\./) && 
+                      !text.includes('Припев') &&
+                      !text.includes('Будь осознанным') &&
+                      !text.includes('песенная служба');
   
-  return text;
+  return { text, isSongTitle };
 }
 
 /**
@@ -237,21 +233,17 @@ async function performSearch(msg, query, searchType) {
     
     if (results.length === 1) {
       const song = results[0];
-      const cleanTitle = song.title.replace(/[#♭]/g, '').trim();
       
       await bot.deleteMessage(chatId, waitMessage.message_id);
-      await sendSong(chatId, cleanTitle, song.author, song.fullText);
+      await sendSong(chatId, song.title, song.author, song.fullText);
       
-      userStates.set(userId, { lastSongTitle: cleanTitle });
+      userStates.set(userId, { lastSongTitle: song.title });
       return;
     }
     
     // Несколько результатов - показываем список
     const maxResults = Math.min(results.length, 15);
-    const songsToShow = results.slice(0, maxResults).map(song => ({
-      ...song,
-      cleanTitle: song.title.replace(/[#♭]/g, '').trim()
-    }));
+    const songsToShow = results.slice(0, maxResults);
     
     await bot.editMessageText(
       `Найдено ${results.length} песен${maxResults < results.length ? ' (показаны первые ' + maxResults + ')' : ''}. Выберите:`, 
@@ -260,7 +252,7 @@ async function performSearch(msg, query, searchType) {
         message_id: waitMessage.message_id,
         reply_markup: {
           inline_keyboard: songsToShow.map((song, index) => [{
-            text: `${song.cleanTitle}${song.author ? ' - ' + song.author.substring(0, 30) : ''}`,
+            text: `${song.title}${song.author ? ' - ' + song.author.substring(0, 30) : ''}`,
             callback_data: `song_${index}`
           }])
         }
@@ -288,8 +280,7 @@ function filterSongs(songs, query, searchType) {
       return song.fullText.toLowerCase().includes(normalizedQuery);
     }
     else if (searchType === 'advanced') {
-      const cleanTitle = song.title.replace(/[#♭]/g, '').trim();
-      return cleanTitle.toLowerCase().includes(normalizedQuery) || 
+      return song.title.toLowerCase().includes(normalizedQuery) || 
              song.fullText.toLowerCase().includes(normalizedQuery) ||
              (song.author && song.author.toLowerCase().includes(normalizedQuery));
     }
@@ -322,11 +313,8 @@ function formatSongForDisplay(title, author, text) {
       .replace(/>/g, '&gt;');
   };
   
-  // Очищаем название от символов # ♭
-  const cleanTitle = title.replace(/[#♭]/g, '').trim();
-  
   // Форматируем заголовок и автора
-  let result = `<b>${escapeHtml(cleanTitle)}</b>\n`;
+  let result = `<b>${escapeHtml(title)}</b>\n`;
   
   if (author && author.trim()) {
     result += `<i>${escapeHtml(author)}</i>\n\n`;
@@ -341,7 +329,7 @@ function formatSongForDisplay(title, author, text) {
   
   // Пропускаем первые строки, которые повторяют название и автора
   let skipLines = 0;
-  if (lines.length > 0 && (lines[0].trim() === title || lines[0].trim() === cleanTitle)) {
+  if (lines.length > 0 && lines[0].trim() === title) {
     skipLines++;
     if (lines.length > 1 && author && lines[1].trim() === author) {
       skipLines++;
@@ -423,8 +411,8 @@ async function sendLongMessage(chatId, text) {
           await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
         }
         
-        // Новая часть с заголовком (убедимся, что заголовок не содержит символы # ♭)
-        const cleanTitleText = titleLine.replace(/<b>|<\/b>|#|♭/g, '').trim();
+        // Новая часть с заголовком
+        const cleanTitleText = titleLine.replace(/<b>|<\/b>/g, '').trim();
         currentPart = `<b>[Продолжение]</b> ${cleanTitleText}\n\n`;
       }
       
@@ -520,14 +508,11 @@ async function handleListCommand(msg) {
         continue;
       }
       
-      // Очищаем название от символов # ♭
-      const cleanTitle = song.title.replace(/[#♭]/g, '').trim();
-      
       // Нормализуем название для унификации
-      const normalizedTitle = cleanTitle.toLowerCase().trim();
+      const normalizedTitle = song.title.toLowerCase().trim();
       
-      // Сохраняем песню с очищенным названием
-      uniqueSongs.set(normalizedTitle, { ...song, title: cleanTitle });
+      // Сохраняем песню
+      uniqueSongs.set(normalizedTitle, song);
     }
     
     // Конвертируем в массив и сортируем
@@ -600,14 +585,11 @@ async function handleRandomCommand(msg) {
     // Выбираем случайную песню
     const randomSong = validSongs[Math.floor(Math.random() * validSongs.length)];
     
-    // Очищаем название от символов # ♭
-    const cleanTitle = randomSong.title.replace(/[#♭]/g, '').trim();
-    
     // Сохраняем информацию
-    userStates.set(userId, { lastSongTitle: cleanTitle });
+    userStates.set(userId, { lastSongTitle: randomSong.title });
     
     // Отправляем песню
-    await sendSong(chatId, cleanTitle, randomSong.author, randomSong.fullText);
+    await sendSong(chatId, randomSong.title, randomSong.author, randomSong.fullText);
     
     // Статистика
     updateStats(userId, '/random');
@@ -635,21 +617,15 @@ async function handleLastCommand(msg) {
     const songs = await getSongs();
     
     // Находим песню
-    const lastSong = songs.find(s => {
-      const cleanTitle = s.title.replace(/[#♭]/g, '').trim();
-      return cleanTitle === userState.lastSongTitle;
-    });
+    const lastSong = songs.find(s => s.title === userState.lastSongTitle);
     
     if (!lastSong) {
       await bot.sendMessage(chatId, 'Не удалось найти последнюю просмотренную песню.');
       return;
     }
     
-    // Очищаем название от символов # ♭
-    const cleanTitle = lastSong.title.replace(/[#♭]/g, '').trim();
-    
     // Отправляем песню
-    await sendSong(chatId, cleanTitle, lastSong.author, lastSong.fullText);
+    await sendSong(chatId, lastSong.title, lastSong.author, lastSong.fullText);
     
     // Статистика
     updateStats(userId, '/last');
@@ -701,14 +677,11 @@ async function handleCallbackQuery(callback) {
       
       const song = userSongs[songIndex];
       
-      // Очищаем название от символов # ♭ если необходимо
-      const cleanTitle = song.cleanTitle || song.title.replace(/[#♭]/g, '').trim();
-      
       // Сохраняем выбранную песню в истории
-      userStates.set(userId, { lastSongTitle: cleanTitle });
+      userStates.set(userId, { lastSongTitle: song.title });
       
       // Отправляем песню
-      await sendSong(chatId, cleanTitle, song.author, song.fullText);
+      await sendSong(chatId, song.title, song.author, song.fullText);
       
       // Удаляем сообщение со списком
       await bot.deleteMessage(chatId, callback.message.message_id);
