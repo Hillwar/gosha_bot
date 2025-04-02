@@ -71,7 +71,6 @@ app.use((req, res, next) => {
 // Инициализация состояний и кешей
 const userStates = new Map();
 const userSongCache = new Map();
-const lastSongPageMap = new Map();
 const docCache = {
   content: null,
   lastUpdate: null,
@@ -900,71 +899,25 @@ async function handleCallbackQuery(callback) {
 /**
  * Отправляет отформатированную песню пользователю
  * @param {number} chatId - ID чата для отправки
- * @param {string} title - Название песни
- * @param {string} content - Содержимое песни
- * @param {boolean} isRandom - Признак случайной песни
+ * @param {string} formattedText - Отформатированный текст песни
  */
-async function sendFormattedSong(chatId, title, content, isRandom = false) {
+async function sendFormattedSong(chatId, formattedText) {
   try {
-    if (!content) {
-      await bot.sendMessage(chatId, 'Не удалось загрузить содержимое песни.');
-      return;
-    }
-    
-    // Извлекаем информацию о песне (автор, ритм, примечания)
-    const songInfo = extractSongInfo(content);
-    
-    // Форматируем текст песни для отображения
-    const formattedText = formatSongForDisplay(title, songInfo.author, songInfo.cleanText);
-    
-    // Определяем текст сообщения
-    let messageText = '';
-    
-    // Для случайной песни добавляем соответствующий заголовок
-    if (isRandom) {
-      messageText = `🎲 <b>Случайная песня</b>\n\n`;
-    }
-    
-    // Добавляем заголовок песни без лишнего вступления
-    messageText += `<b>${title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</b>`;
-    
-    // Добавляем информацию об авторе, если она есть
-    if (songInfo.author) {
-      messageText += `\n<i>${songInfo.author.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</i>`;
-    }
-    
-    // Добавляем информацию о ритме, если она есть
-    if (songInfo.rhythm) {
-      messageText += `\n<i>Ритм: ${songInfo.rhythm.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</i>`;
-    }
-    
-    // Добавляем примечания, если они есть
-    if (songInfo.notes) {
-      messageText += `\n<i>Примечание: ${songInfo.notes.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</i>`;
-    }
-    
-    // Добавляем основной текст песни
-    messageText += `\n\n${formattedText}`;
-    
     // Проверяем длину сообщения
-    if (messageText.length > MAX_MESSAGE_LENGTH) {
+    if (formattedText.length > MAX_MESSAGE_LENGTH) {
       // Разбиваем на части и отправляем по частям
-      await sendLongMessage(chatId, messageText);
+      await sendLongMessage(chatId, formattedText);
     } else {
       // Отправляем обычное сообщение
-      await bot.sendMessage(chatId, messageText, {
+      await bot.sendMessage(chatId, formattedText, {
         parse_mode: 'HTML'
       });
     }
-    
-    // Увеличиваем счетчик просмотров для данной песни
-    stats.songViews[title] = (stats.songViews[title] || 0) + 1;
   } catch (error) {
     logger.error('Error sending formatted song:', {
       error: error.message,
       stack: error.stack,
-      chatId,
-      title
+      chatId
     });
     
     await bot.sendMessage(
