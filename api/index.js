@@ -966,7 +966,8 @@ const deleteLoadingMessage = async (ctx, messageId) => {
   }
 };
 
-// Функция для обработки команды /search - поиск песни по названию
+/**
+ * Обработка команды /search - поиск песни по названию
  * @param {Object} msg - Сообщение от пользователя
  * @param {string} match - Результат регулярного выражения
  */
