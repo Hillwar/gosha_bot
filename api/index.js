@@ -1174,19 +1174,28 @@ async function fetchSongbookContent() {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       
-      if (line.startsWith('♭')) {
+      // Проверяем, содержит ли строка символ ♭
+      if (line.includes('♭')) {
         // Если нашли новую песню, сохраняем предыдущую (если была)
         if (currentSong) {
           songs.push(currentSong);
         }
         
-        // Название песни (без символа ♭)
-        const title = line.substring(1).trim();
+        // Разделяем строку на части до и после символа ♭
+        const parts = line.split('♭');
+        // Название песни - часть после ♭
+        const title = parts[1] ? parts[1].trim() : '';
         
-        // Автор песни (следующая строка)
+        // Следующая строка может быть автором или текстом
         let author = "";
         if (i + 1 < lines.length) {
-          author = lines[i + 1].trim();
+          const nextLine = lines[i + 1].trim();
+          // Проверяем, не начинается ли следующая строка с "Слова" или "Ритмика"
+          if (nextLine.startsWith('Слова') || 
+              nextLine.includes('Музыка') || 
+              nextLine === 'Ритмика') {
+            author = nextLine;
+          }
         }
         
         // Создаем новую текущую песню
@@ -1201,11 +1210,31 @@ async function fetchSongbookContent() {
         currentSong.content.push(title);
         if (author) {
           currentSong.content.push(author);
+          i++; // Пропускаем строку автора в следующей итерации
         }
       }
       else if (currentSong) {
-        // Добавляем строку к текущей песне
-        currentSong.content.push(lines[i]);
+        // Проверяем, не начало ли это новой песни (по контексту)
+        if ((line.startsWith('Слова') || line === 'Ритмика') && 
+            i > 0 && lines[i-1].trim() && !lines[i-1].includes('♭')) {
+          // Это может быть автор для новой песни, где символ ♭ отсутствует
+          // Сохраняем предыдущую песню
+          songs.push(currentSong);
+          
+          // Используем предыдущую строку как название
+          const prevLine = lines[i-1].trim();
+          
+          // Создаем новую песню
+          currentSong = {
+            title: prevLine,
+            author: line,
+            startLine: i-1,
+            content: [prevLine, line]
+          };
+        } else {
+          // Добавляем строку к текущей песне
+          currentSong.content.push(line);
+        }
       }
     }
     
@@ -1214,8 +1243,12 @@ async function fetchSongbookContent() {
       songs.push(currentSong);
     }
     
-    // Форматируем контент песен как текст
+    // Форматируем контент песен как текст и очищаем лишние символы
     for (const song of songs) {
+      // Очищаем название от символа ♭, если он остался
+      song.title = song.title.replace(/♭/g, '').trim();
+      
+      // Собираем полный текст песни
       song.fullText = song.content.join('\n');
     }
     
@@ -1263,33 +1296,36 @@ async function handleListCommand(msg) {
       return;
     }
     
-    // Фильтруем песни, чтобы убрать дубликаты и пустые элементы
-    const filteredSongs = [];
-    const processedTitles = new Set();
+    // Фильтруем песни, чтобы убрать дубликаты, пустые элементы и служебные строки
+    const uniqueSongs = new Map(); // Используем Map для хранения уникальных песен
     
     for (const song of songs) {
-      // Очищаем название от символа ♭
-      const cleanTitle = song.title.replace(/♭/g, '').trim();
-      
-      // Пропускаем пустые названия или названия с "Ритмика" или если это явно не песня
-      if (!cleanTitle || 
-          cleanTitle === 'Ритмика' || 
-          cleanTitle.includes('Припев') ||
-          cleanTitle.includes('Правила орлятского круга') ||
-          cleanTitle.match(/^\d+\.\s/) || // Пропускаем пронумерованные правила
-          processedTitles.has(cleanTitle)) {
+      // Пропускаем пустые названия или служебные строки
+      if (!song.title || 
+          song.title === 'Ритмика' || 
+          song.title.includes('Припев') ||
+          song.title.includes('Правила орлятского круга') ||
+          song.title.match(/^\d+\.\s/) || // Пропускаем пронумерованные правила
+          song.title.length < 3) { // Пропускаем слишком короткие названия
         continue;
       }
       
-      // Добавляем в список обработанных названий
-      processedTitles.add(cleanTitle);
+      // Нормализуем название для унификации
+      const normalizedTitle = song.title.toLowerCase().trim();
       
-      // Добавляем песню в отфильтрованный список
-      filteredSongs.push({
-        title: cleanTitle,
-        author: song.author
-      });
+      // Добавляем в Map только если этого названия еще нет 
+      // или если текущая песня имеет автора, а предыдущая - нет
+      if (!uniqueSongs.has(normalizedTitle) || 
+          (!uniqueSongs.get(normalizedTitle).author && song.author)) {
+        uniqueSongs.set(normalizedTitle, song);
+      }
     }
+    
+    // Конвертируем Map в массив
+    const filteredSongs = Array.from(uniqueSongs.values());
+    
+    // Сортируем песни по алфавиту
+    filteredSongs.sort((a, b) => a.title.localeCompare(b.title, 'ru'));
     
     // Формируем сообщение со списком песен
     let message = `Список песен в аккорднике (${filteredSongs.length}):\n\n`;
@@ -1299,8 +1335,14 @@ async function handleListCommand(msg) {
       const songNumber = i + 1;
       const song = filteredSongs[i];
       
-      // Формируем строку с названием и автором (если есть)
-      if (song.author && song.author.trim() && !song.author.includes('♭')) {
+      // Определяем, есть ли у песни корректный автор
+      const hasValidAuthor = song.author && 
+                           song.author.trim() && 
+                           song.author.includes('Слова') || 
+                           song.author.includes('Музыка');
+      
+      // Форматируем строку с названием и автором (если есть)
+      if (hasValidAuthor) {
         message += `${songNumber}. ${song.title} — ${song.author}\n`;
       } else {
         message += `${songNumber}. ${song.title}\n`;
