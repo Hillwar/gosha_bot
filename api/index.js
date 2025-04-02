@@ -1,3 +1,8 @@
+/**
+ * Gosha Bot - Telegram бот для поиска и отображения песен с аккордами
+ */
+
+// Зависимости
 require('dotenv').config();
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
@@ -6,9 +11,14 @@ const winston = require('winston');
 const { exec } = require('child_process');
 const path = require('path');
 
-// Configure logger with more detailed format
+// КОНСТАНТЫ
+const MAX_MESSAGE_LENGTH = 4000; // Оставляем запас под максимальный размер сообщения Telegram (4096)
+
+/**
+ * Настройка логирования
+ */
 const logger = winston.createLogger({
-  level: 'debug', // Set to debug for more detailed logs
+  level: process.env.LOG_LEVEL || 'debug',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.colorize(),
@@ -41,10 +51,13 @@ const logger = winston.createLogger({
   ]
 });
 
+/**
+ * Настройка Express
+ */
 const app = express();
 app.use(express.json());
 
-// Log all incoming requests
+// Middleware для логирования запросов
 app.use((req, res, next) => {
   logger.debug('Incoming request:', {
     method: req.method,
@@ -55,56 +68,77 @@ app.use((req, res, next) => {
   next();
 });
 
-// Check if we're in development mode
-const isDev = process.env.NODE_ENV === 'development';
+// Инициализация состояний и кешей
+const userStates = new Map();
+const userSongCache = new Map();
+const lastSongPageMap = new Map();
+const docCache = {
+  content: null,
+  lastUpdate: null,
+  updateInterval: 5 * 60 * 1000 // 5 минут
+};
 
-// Initialize bot either with polling or webhook
-let bot;
-if (isDev) {
-  logger.info('Starting bot in POLLING mode for local development');
-  
-  // Create bot with polling turned off initially
-  bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
-  
-  // Clear updates before starting polling to avoid conflicts
-  (async () => {
-    try {
-      // Get current offset
-      const updates = await bot.getUpdates({});
-      logger.info(`Found ${updates.length} pending updates`);
-      
-      if (updates.length > 0) {
-        // Get highest update_id and use it to mark all updates as read
-        const lastUpdateId = Math.max(...updates.map(update => update.update_id));
-        await bot.getUpdates({ offset: lastUpdateId + 1 });
-        logger.info(`Cleared ${updates.length} pending updates`);
-      }
-      
-      // Start polling after clearing updates
-      bot.startPolling();
-      logger.info('Polling started successfully');
-    } catch (error) {
-      logger.error('Error preparing polling:', error);
-      process.exit(1);
-    }
-  })();
-  
-  // Log polling events
-  bot.on('polling_error', (error) => {
-    logger.error('Polling error:', error);
+// Статистика использования бота
+const stats = {
+  searches: 0,
+  commands: 0,
+  songViews: {},
+  commandsUsed: {},
+  callbacksUsed: {},
+  userActivity: {},
+  lastReset: Date.now()
+};
+
+/**
+ * Инициализация Google API
+ */
+let auth;
+if (process.env.GOOGLE_SERVICE_ACCOUNT_B64) {
+  // Используем учетные данные в формате base64
+  const credentials = JSON.parse(Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_B64, 'base64').toString('utf-8'));
+  auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/documents.readonly']
   });
+} else if (process.env.GOOGLE_SERVICE_ACCOUNT) {
+  // Используем учетные данные в формате JSON-строки
+  try {
+    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+    auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/documents.readonly']
+    });
+  } catch (err) {
+    console.error('Ошибка при парсинге GOOGLE_SERVICE_ACCOUNT:', err);
+    logger.error('Ошибка при парсинге GOOGLE_SERVICE_ACCOUNT:', {
+      error: err.message,
+      stack: err.stack
+    });
+    // Создаем базовую авторизацию для возможности запуска приложения с ошибкой
+    auth = new google.auth.GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/documents.readonly']
+    });
+  }
 } else {
-  logger.info('Starting bot in WEBHOOK mode');
-  bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+  // Если учетные данные не предоставлены, выводим предупреждение
+  console.warn('ВНИМАНИЕ: Учетные данные Google API не найдены!');
+  logger.warn('Учетные данные Google API не найдены. Бот не сможет получать данные из Google Docs.');
   
-  // Setup webhook based on environment
-  setupWebhook().catch(error => {
-    logger.error('Failed to setup webhook:', error);
-    process.exit(1);
+  // Создаем базовую авторизацию для возможности запуска приложения с ошибкой
+  auth = new google.auth.GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/documents.readonly']
   });
 }
 
-// Log all bot events
+const docs = google.docs({ version: 'v1', auth });
+
+/**
+ * Инициализация Telegram Bot
+ */
+const isDev = process.env.NODE_ENV === 'development';
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+
+// Общее логирование ошибок бота
 bot.on('webhook_error', (error) => {
   logger.error('Webhook error:', error);
 });
@@ -113,309 +147,175 @@ bot.on('error', (error) => {
   logger.error('Bot error:', error);
 });
 
-// Log all updates
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
+bot.on('polling_error', (error) => {
+  logger.error('Polling error:', error);
+});
+
+// Регистрация обработчиков команд
+bot.onText(/\/start/, handleStartCommand);
+bot.onText(/\/help/, handleHelpCommand);
+bot.onText(/\/list/, handleListCommand);
+bot.onText(/\/random/, handleRandomCommand);
+bot.onText(/\/search(?:\s+(.+))?/, handleSearchCommand);
+bot.onText(/\/text(?:\s+(.+))?/, handleTextCommand);
+
+// Регистрация обработчика текстовых сообщений
+bot.on('message', (msg) => {
+  // Пропускаем команды
+  if (msg.text && msg.text.startsWith('/')) return;
   
-  // Skip if no text
-  if (!text) return;
-  
-  // Skip if it's a command
-  if (text.startsWith('/')) return;
-  
-  const userState = userStates.get(chatId);
-  if (userState) {
-    if (userState.mode === 'search_by_name' || userState.mode === 'search_by_text') {
-      logger.info(`User ${chatId} searching for: ${text}`, {
-        user: msg.from,
-        chat: msg.chat,
-        searchMode: userState.mode
-      });
-      
-      // Удаляем предыдущее сообщение бота с запросом ввода
-      if (userState.promptMessageId) {
-        try {
-          await bot.deleteMessage(chatId, userState.promptMessageId);
-          logger.debug(`Deleted prompt message for user ${chatId}`);
-        } catch (error) {
-          logger.warn(`Failed to delete prompt message for user ${chatId}:`, {
-            error: error.message
-          });
-          // Продолжаем работу даже если не удалось удалить сообщение
-        }
-      }
-      
-      // Обновляем счетчик поисков
-      stats.searches++;
-      
-      const searchByText = userState.mode === 'search_by_text';
-      const songs = await searchSongs(text, searchByText);
-      
-      if (songs.length === 0) {
-        // Сохраняем текущий режим поиска для повторного поиска
-        const currentMode = userState.mode;
-        
-        // Отправляем сообщение о ненахождении песен с инлайн-кнопкой для нового поиска
-        const opts = {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: 'Новый поиск', callback_data: currentMode }]
-            ]
-          }
-        };
-        
-        await bot.sendMessage(chatId, 'Песни не найдены. Попробуйте другой поисковый запрос.', opts);
-        
-        logger.info(`No songs found for user ${chatId}`, {
-          query: text,
-          searchMode: userState.mode
-        });
-        
-        // Очищаем состояние пользователя
-        userStates.delete(chatId);
-        return;
-      }
-      
-      // If only one song found, show it directly
-      if (songs.length === 1) {
-        const songTitle = songs[0].title;
-        const contentLines = songs[0].content.split('\n');
-        const songTextOnly = contentLines.slice(1).join('\n').trim();
-        
-        // Отправляем песню в отформатированном виде
-        const success = await sendFormattedSong(chatId, songTitle, songTextOnly, songs[0].page);
-        
-        if (!success) {
-          await bot.sendMessage(chatId, 'Произошла ошибка при отправке песни.');
-        }
-      } else {
-        // Create inline keyboard with numbered song options
-        const keyboard = songs.map((song, index) => [{
-          text: `${index + 1}. ${song.title}`,
-          callback_data: `song_${song.page}`
-        }]);
-        
-        const sentMessage = await bot.sendMessage(chatId, 'Выберите песню:', {
-          reply_markup: {
-            inline_keyboard: keyboard
-          }
-        });
-        
-        // Сохраняем ID сообщения со списком песен для последующего удаления
-        userState.songListMessageId = sentMessage.message_id;
-        
-        logger.info(`Sent ${songs.length} song options to user ${chatId}`, {
-          songs: songs.map((s, i) => ({ index: i + 1, title: s.title, page: s.page }))
-        });
-      }
-    }
+  // Обрабатываем только текстовые сообщения
+  if (msg.text) {
+    handleTextMessage(msg);
   }
 });
 
-// Handle callback queries with detailed logging
-bot.on('callback_query', async (callbackQuery) => {
-  const chatId = callbackQuery.message.chat.id;
-  const data = callbackQuery.data;
-  const messageId = callbackQuery.message.message_id;
+// Регистрация обработчика callback-запросов
+bot.on('callback_query', handleCallbackQuery);
 
-  logger.info(`User ${chatId} selected option: ${data}`, {
-    user: callbackQuery.from,
-    chat: callbackQuery.message.chat,
-    message: callbackQuery.message
-  });
+// Инициализация статистики использования команд и callback-кнопок
+stats.commandsUsed = {};
+stats.callbacksUsed = {};
+stats.userActivity = {};
+stats.songViews = {};
 
-  if (data === 'search_by_name' || data === 'search_by_text') {
-    // Удаляем сообщение с кнопками выбора типа поиска или сообщение о ненахождении песен
-    try {
-      await bot.deleteMessage(chatId, messageId);
-      logger.debug(`Deleted search type selection message for user ${chatId}`);
-    } catch (error) {
-      logger.warn(`Failed to delete search type selection message for user ${chatId}:`, {
-        error: error.message
-      });
-    }
-    
-    const searchMode = data === 'search_by_name' ? 'search_by_name' : 'search_by_text';
-    const promptText = data === 'search_by_name' ? 'Введите название песни:' : 'Введите текст песни:';
-    
-    // Создаем или обновляем состояние пользователя
-    if (!userStates.has(chatId)) {
-      userStates.set(chatId, {});
-    }
-    
-    userStates.get(chatId).mode = searchMode;
-    
-    // Отправляем сообщение с запросом ввода и сохраняем его ID
-    const promptMessage = await bot.sendMessage(chatId, promptText);
-    userStates.get(chatId).promptMessageId = promptMessage.message_id;
-    
-  } else if (data.startsWith('song_')) {
-    const pageNumber = parseInt(data.split('_')[1]);
-    
-    // Удаляем сообщение со списком песен
-    try {
-      await bot.deleteMessage(chatId, messageId);
-      logger.debug(`Deleted song selection message for user ${chatId}`);
-    } catch (error) {
-      logger.warn(`Failed to delete song selection message for user ${chatId}:`, {
-        error: error.message
-      });
-    }
-    
-    try {
-      const documentId = getDocumentIdFromUrl(process.env.SONGBOOK_URL);
-      const songContent = await getSongContent(documentId, pageNumber);
-      if (songContent) {
-        // Разделяем название и содержимое песни
-        const contentLines = songContent.split('\n');
-        const songTitle = contentLines[0].trim();
-        
-        // Получаем содержимое песни без названия
-        const songTextOnly = contentLines.slice(1).join('\n').trim();
-        
-        // Отправляем песню в отформатированном виде
-        const success = await sendFormattedSong(chatId, songTitle, songTextOnly, pageNumber);
-        
-        if (!success) {
-          throw new Error('Failed to send formatted song');
-        }
-      } else {
-        throw new Error('Song content is null');
-      }
-    } catch (error) {
-      logger.error(`Error sending song content to user ${chatId}:`, {
-        error: error.message,
-        stack: error.stack,
-        pageNumber,
-        user: callbackQuery.from,
-        chat: callbackQuery.message.chat
-      });
-      await bot.sendMessage(chatId, 'Произошла ошибка при получении текста песни.');
-    }
-    
-    // Очищаем состояние пользователя после успешной обработки
-    userStates.delete(chatId);
-    
-  } else if (data.startsWith('copy_')) {
-    // Отправляем сообщение с полным текстом песни для копирования
-    const pageNumber = parseInt(data.split('_')[1]);
-    const songText = userSongCache.get(`song_${pageNumber}`);
-    
-    if (songText) {
-      await bot.sendMessage(chatId, songText);
-      await bot.answerCallbackQuery(callbackQuery.id, { text: 'Текст скопирован' });
-    } else {
-      await bot.answerCallbackQuery(callbackQuery.id, { text: 'Ошибка при копировании текста' });
-    }
+// Проверка наличия необходимых переменных окружения при запуске
+function checkRequiredEnvVariables() {
+  const required = ['BOT_TOKEN', 'SONGBOOK_URL'];
+  const missing = required.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    console.error(`ОШИБКА: Следующие обязательные переменные окружения не установлены: ${missing.join(', ')}`);
+    console.error('Бот не может быть запущен без этих переменных. Пожалуйста, проверьте файл .env');
+    logger.error(`Missing required environment variables: ${missing.join(', ')}`);
+    return false;
   }
-});
+  
+  return true;
+}
 
-// Function to setup webhook with ngrok
-async function setupWebhook() {
+// Инициализация бота
+async function initializeBot() {
   try {
-    // First, delete any existing webhook to clear previous sessions
-    await bot.deleteWebHook();
-    logger.info('Existing webhook deleted');
+    console.log('');
+    console.log('=====================================');
+    console.log('        🎸 Gosha Bot Запуск 🎵       ');
+    console.log('=====================================');
+    console.log('');
     
-    // Check if webhook URL is provided directly
-    if (process.env.WEBHOOK_URL) {
-      await bot.setWebHook(process.env.WEBHOOK_URL);
-      logger.info('New webhook set from environment:', process.env.WEBHOOK_URL);
-      
-      const webhookInfo = await bot.getWebHookInfo();
-      logger.info('Webhook info:', webhookInfo);
+    // Проверяем переменные окружения
+    if (!checkRequiredEnvVariables()) {
       return;
     }
     
-    // Otherwise use ngrok
-    // Start ngrok
-    const ngrokPath = path.join(__dirname, '..', 'ngrok.exe'); // Adjust path as needed
-    const ngrok = exec(`${ngrokPath} http 3333`, (error, stdout, stderr) => {
-      if (error) {
-        logger.error('Error starting ngrok:', error);
+    // Запускаем Express-сервер
+    const PORT = process.env.PORT || 3333;
+    const server = app.listen(PORT, () => {
+      logger.info(`Сервер запущен на порту ${PORT}`);
+      console.log(`✅ Сервер запущен на порту ${PORT}`);
+    });
+    
+    // Обработка ошибок сервера
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        logger.error(`Порт ${PORT} уже используется. Выберите другой порт.`);
+        console.error(`❌ Ошибка: порт ${PORT} уже используется. Выберите другой порт в .env файле.`);
+      } else {
+        logger.error('Ошибка запуска сервера:', {
+          error: error.message,
+          stack: error.stack
+        });
+        console.error('❌ Ошибка запуска сервера:', error.message);
+      }
+    });
+    
+    // Активируем бота
+    try {
+      if (!process.env.BOT_TOKEN) {
+        throw new Error('BOT_TOKEN не задан в переменных окружения');
+      }
+      
+      // Проверяем режим работы бота
+      if (isDev) {
+        logger.info('Бот запущен в режиме опроса (polling)');
+        console.log('🤖 Бот запущен в режиме опроса (polling)');
+        bot.startPolling();
+      } else {
+        logger.info('Бот запущен в режиме webhook');
+        console.log('🤖 Бот запущен в режиме webhook');
+        await setupWebhook();
+      }
+      
+      console.log('✅ Бот успешно активирован и готов к обработке сообщений');
+    } catch (error) {
+      logger.error('Ошибка активации бота:', {
+        error: error.message,
+        stack: error.stack
+      });
+      console.error('❌ Ошибка активации бота:', error.message);
+      return;
+    }
+    
+    // Тестируем доступ к Google Docs
+    try {
+      logger.info('Проверка доступа к Google Docs...');
+      console.log('🔄 Проверка доступа к Google Docs...');
+      
+      const document = await getDocumentContent();
+      
+      if (!document || !document.body || !document.body.content) {
+        logger.error('Недопустимая структура документа при запуске');
+        console.error('❌ Ошибка доступа к документу: недопустимая структура документа');
+        console.error('⚠️ Бот запущен, но функции, связанные с Google Docs, могут не работать');
         return;
       }
-      logger.info('Ngrok started:', stdout);
-    });
-
-    // Wait for ngrok to start and get URL
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Get ngrok URL
-    const response = await fetch('http://localhost:4040/api/tunnels');
-    const data = await response.json();
-    const ngrokUrl = data.tunnels[0].public_url;
-
-    // Set new webhook
-    const webhookUrl = `${ngrokUrl}/api/webhook`;
-    await bot.setWebHook(webhookUrl);
-    logger.info('New webhook set with ngrok:', webhookUrl);
-
-    // Get webhook info
-    const webhookInfo = await bot.getWebHookInfo();
-    logger.info('Webhook info:', webhookInfo);
-
-    // Store ngrok process for cleanup
-    process.ngrok = ngrok;
+      
+      const titleCount = document.body.content.filter(item => 
+        item && item.paragraph && 
+        item.paragraph.paragraphStyle && 
+        item.paragraph.paragraphStyle.namedStyleType === 'TITLE'
+      ).length;
+      
+      logger.info(`Успешное подключение к Google Docs. Найдено ${titleCount} заголовков.`);
+      console.log(`✅ Успешное подключение к Google Docs. Найдено ${titleCount} заголовков`);
+      console.log('');
+      console.log('🤖 Бот запущен и готов к работе!');
+      console.log('');
+    } catch (error) {
+      logger.error('Ошибка доступа к Google Docs при запуске:', {
+        error: error.message,
+        url: process.env.SONGBOOK_URL || 'не задан'
+      });
+      console.error('❌ Ошибка доступа к Google Docs:', error.message);
+      console.error('⚠️ Бот запущен, но функции, связанные с Google Docs, могут не работать');
+      console.log('');
+    }
   } catch (error) {
-    logger.error('Error setting up webhook:', error);
-    throw error;
+    logger.error('Ошибка инициализации бота:', {
+      error: error.message,
+      stack: error.stack
+    });
+    console.error('❌ Критическая ошибка при запуске бота:', error.message);
   }
 }
 
-// Cleanup on exit
-process.on('SIGINT', () => {
-  if (process.ngrok) {
-    process.ngrok.kill();
-  }
-  process.exit();
-});
+// Запускаем бот
+initializeBot();
 
-// Webhook endpoint
-app.post('/api/webhook', (req, res) => {
-  try {
-    bot.handleUpdate(req.body);
-    logger.debug('Webhook update processed');
-    res.sendStatus(200);
-  } catch (error) {
-    logger.error('Error processing webhook:', error);
-    res.sendStatus(500);
-  }
-});
+/**
+ * ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+ */
 
-// Initialize Google Docs API with retry logic
-const auth = new google.auth.GoogleAuth({
-  credentials: process.env.GOOGLE_SERVICE_ACCOUNT_B64 
-    ? JSON.parse(Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_B64, 'base64').toString('utf-8'))
-    : JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
-  scopes: ['https://www.googleapis.com/auth/documents.readonly']
-});
-
-const docs = google.docs({ version: 'v1', auth });
-
-// Cache for Google Docs content
-const docCache = {
-  content: null,
-  lastUpdate: null,
-  updateInterval: 5 * 60 * 1000 // 5 minutes
-};
-
-// Initialize bot variables
-const userStates = new Map();
-const userSongCache = new Map();
-const lastSongPageMap = new Map();
-
-// Initialize statistics
-const stats = {
-  searches: 0,
-  commands: 0,
-  songViews: {},
-  lastReset: Date.now()
-};
-
-// Helper function to extract document ID from URL
+/**
+ * Извлекает ID документа из URL Google Docs
+ * @param {string} url - URL документа Google Docs
+ * @returns {string} - ID документа
+ */
 function getDocumentIdFromUrl(url) {
+  if (!url) {
+    throw new Error('URL документа не указан');
+  }
+  
   if (url.includes('/d/')) {
     // Формат: https://docs.google.com/document/d/DOCUMENT_ID/edit
     return url.split('/d/')[1].split('/')[0];
@@ -430,10 +330,14 @@ function getDocumentIdFromUrl(url) {
   }
 }
 
-// Helper function to get document content with caching
+/**
+ * Получает содержимое документа с кешированием
+ * @returns {Promise<Object>} - Данные документа от Google API
+ */
 async function getDocumentContent() {
   try {
     const now = Date.now();
+    // Возвращаем кешированный контент, если он актуален
     if (docCache.content && docCache.lastUpdate && (now - docCache.lastUpdate < docCache.updateInterval)) {
       logger.debug('Using cached document content');
       return docCache.content;
@@ -447,7 +351,7 @@ async function getDocumentContent() {
 
     logger.info('Fetching fresh document content');
     
-    // Правильно извлекаем ID документа из URL
+    // Извлекаем ID документа из URL
     const url = process.env.SONGBOOK_URL;
     const documentId = getDocumentIdFromUrl(url);
     
@@ -459,7 +363,7 @@ async function getDocumentContent() {
       throw new Error('Missing Google service account credentials');
     }
     
-    // Добавляем подробное логирование API запроса
+    // Делаем запрос к Google API
     logger.debug('Making API request to Google Docs', {
       documentId,
       serviceAccountType: process.env.GOOGLE_SERVICE_ACCOUNT_B64 ? 'Base64 encoded' : 'JSON'
@@ -469,6 +373,7 @@ async function getDocumentContent() {
       documentId: documentId
     });
     
+    // Проверяем результат запроса
     if (!document || !document.data) {
       logger.error('Google API returned empty document', {
         responseStatus: document ? document.status : 'undefined',
@@ -483,6 +388,7 @@ async function getDocumentContent() {
       contentLength: document.data.body && document.data.body.content ? document.data.body.content.length : 0
     });
     
+    // Обновляем кеш
     docCache.content = document.data;
     docCache.lastUpdate = now;
     logger.debug('Document content updated successfully');
@@ -498,7 +404,12 @@ async function getDocumentContent() {
   }
 }
 
-// Get song content by page number
+/**
+ * Получает содержимое песни по номеру страницы
+ * @param {string} documentId - ID документа Google Docs
+ * @param {number} pageNumber - Номер страницы/песни
+ * @returns {Promise<string|null>} - Текст песни или null при ошибке
+ */
 async function getSongContent(documentId, pageNumber) {
   try {
     const document = await getDocumentContent();
@@ -508,9 +419,8 @@ async function getSongContent(documentId, pageNumber) {
       throw new Error('Invalid document structure');
     }
     
-    // Начинаем с номера страницы 2, т.к. на первой странице находятся правила отрядного круга
-    // а песни начинаются со второй страницы
-    let currentPage = 2; // Изменено: начинаем со второй страницы
+    // Начинаем со второй страницы (пропускаем правила)
+    let currentPage = 2;
     let foundSong = false;
     let title = '';
     let paragraphContent = [];
@@ -546,7 +456,6 @@ async function getSongContent(documentId, pageNumber) {
         } 
         // Если это не заголовок и мы уже нашли нужную песню
         else if (foundSong && paragraphElements) {
-          const paragraph = [];
           let isParagraphHeader = false;
           
           // Проверяем, содержит ли параграф ключевые слова, указывающие на заголовок раздела песни
@@ -611,7 +520,11 @@ async function getSongContent(documentId, pageNumber) {
   }
 }
 
-// Функция для структурированного форматирования текста песни
+/**
+ * Форматирует структурированную песню в текст
+ * @param {Array} paragraphs - Массив параграфов с типами и текстом
+ * @returns {string} - Отформатированный текст песни
+ */
 function formatSongTextStructure(paragraphs) {
   if (!paragraphs || paragraphs.length === 0) return '';
   
@@ -644,18 +557,26 @@ function formatSongTextStructure(paragraphs) {
   return result.trim();
 }
 
-// Function to format the song text for display
+/**
+ * Экранирует HTML-специальные символы для корректного отображения
+ * @param {string} text - Исходный текст
+ * @returns {string} - Текст с экранированными HTML-символами
+ */
 function formatSongForDisplay(text) {
   if (!text) return '';
   
-  // Escape HTML characters for HTML display
+  // Экранируем HTML-символы для корректного отображения
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
 
-// Function to extract song information from text
+/**
+ * Извлекает метаданные из текста песни
+ * @param {string} text - Текст песни
+ * @returns {Object} - Объект с метаданными песни
+ */
 function extractSongInfo(text) {
   const info = {
     author: null,
@@ -789,94 +710,12 @@ function extractSongInfo(text) {
   return info;
 }
 
-// Функция для форматирования текста песни
-function formatSongText(text) {
-  if (!text) return '';
-  
-  // Разбиваем текст на строки
-  let lines = text.split('\n');
-  
-  // Удаляем пустые строки в начале и конце
-  while (lines.length > 0 && !lines[0].trim()) lines.shift();
-  while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
-  
-  // Удаляем лишние пробелы в каждой строке, сохраняя аккорды и структуру
-  lines = lines.map(line => {
-    const trimmedLine = line.trim();
-    
-    // Проверка, является ли строка строкой с аккордами
-    // Поддержка русских аккордов (Am, C, H7, E, D, G, Dm и т.д.)
-    const isChordLine = /^([ABCDEFGH][#b]?[m]?[0-9]*(\/[ABCDEFGH][#b]?)?(\s+|$))+$/.test(trimmedLine);
-    
-    // Проверка на номер куплета или припев
-    const isVerseIndicator = /^(\d+\.|\d+:|Припев:|Куплет \d+:|Chorus:|Verse \d+:|Bridge:|Бридж:)/.test(trimmedLine);
-    
-    // Если это строка аккордов, сохраняем её полностью (с пробелами)
-    if (isChordLine) return line;
-    
-    // Если это указатель на куплет или часть песни, оставляем как есть
-    if (isVerseIndicator) return trimmedLine;
-    
-    // Для обычного текста убираем лишние пробелы в начале и конце
-    return trimmedLine;
-  });
-  
-  // Обрабатываем строки, группируя их по куплетам
-  let result = [];
-  let lastEmpty = false;
-  let inVerse = false;
-  let inChordSection = false;
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const isEmpty = !line.trim();
-    
-    // Пропускаем повторяющиеся пустые строки
-    if (isEmpty && lastEmpty) continue;
-    
-    // Проверяем, начало ли это куплета
-    const isVerseStart = /^(\d+\.|\d+:|Припев:|Куплет \d+:|Chorus:|Verse \d+:|Bridge:|Бридж:)/.test(line.trim());
-    
-    // Если начался новый куплет, добавляем пустую строку перед ним (если это не первый куплет)
-    if (isVerseStart && result.length > 0 && result[result.length-1].trim() !== '') {
-      result.push('');
-      inVerse = true;
-    }
-    
-    // Проверяем, является ли текущая строка строкой с аккордами
-    const isChordLine = !isEmpty && /^([ABCDEFGH][#b]?[m]?[0-9]*(\/[ABCDEFGH][#b]?)?(\s+|$))+$/.test(line.trim());
-    
-    // Если это строка с аккордами, помечаем что мы в секции с аккордами
-    if (isChordLine) {
-      inChordSection = true;
-      result.push(line);
-      lastEmpty = false;
-      continue;
-    }
-    
-    // Если эта строка идёт сразу после строки с аккордами, она должна быть текстом песни
-    if (inChordSection && !isEmpty) {
-      inChordSection = false;
-      result.push(line);
-      lastEmpty = false;
-      continue;
-    }
-    
-    // Пустая строка означает конец текущего куплета
-    if (isEmpty) {
-      inVerse = false;
-      inChordSection = false;
-    }
-    
-    result.push(line);
-    lastEmpty = isEmpty;
-  }
-  
-  // Объединяем строки и убираем последовательные пустые строки
-  return result.join('\n').replace(/\n{3,}/g, '\n\n');
-}
-
-// Helper function to search songs with improved error handling
+/**
+ * Поиск песен по названию или тексту
+ * @param {string} query - Поисковый запрос
+ * @param {boolean} searchByText - Флаг поиска по тексту (если false - по названию)
+ * @returns {Promise<Array>} - Массив найденных песен
+ */
 async function searchSongs(query, searchByText = false) {
   try {
     const document = await getDocumentContent();
@@ -1042,110 +881,103 @@ async function searchSongs(query, searchByText = false) {
   }
 }
 
-// Check document access on startup
-(async () => {
-  try {
-    logger.info('Testing access to Google Doc on startup...');
-    const document = await getDocumentContent();
-    
-    if (!document || !document.body || !document.body.content) {
-      logger.error('Invalid document structure returned on startup');
-      return;
+/**
+ * ОБРАБОТЧИКИ КОМАНД БОТА
+ */
+
+/**
+ * Обработка команды /start
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleStartCommand(msg) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  
+  logger.info(`User ${userId} (${userName}) started the bot`, {
+    command: '/start',
+    user: {
+      id: userId,
+      name: userName
     }
-    
-    const titleCount = document.body.content.filter(item => 
-      item && item.paragraph && 
-      item.paragraph.paragraphStyle && 
-      item.paragraph.paragraphStyle.namedStyleType === 'TITLE'
-    ).length;
-    
-    logger.info(`Successfully connected to Google Doc. Found ${titleCount} songs.`);
-  } catch (error) {
-    logger.error('Failed to access Google Doc on startup:', {
-      error: error.message,
-      url: process.env.SONGBOOK_URL || 'not set'
-    });
-  }
-})();
-
-// Command handlers with detailed logging
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-  logger.info(`User ${chatId} started the bot`, {
-    user: msg.from,
-    chat: msg.chat
-  });
-  const message = 'Привет! Я бот для поиска аккордов и песен. Используйте /help для просмотра доступных команд.';
-  await bot.sendMessage(chatId, message);
-});
-
-bot.onText(/\/help/, async (msg) => {
-  const chatId = msg.chat.id;
-  logger.info(`User ${chatId} requested help`, {
-    user: msg.from,
-    chat: msg.chat
-  });
-  const message = `Доступные команды:
-/chords - Поиск песни в аккорднике
-/list - Список всех песен
-/circlerules - Правила орлятского круга
-/status - Статистика запросов
-/random - Случайная песня`;
-  await bot.sendMessage(chatId, message);
-});
-
-// Обработчик команды /circlerules
-bot.onText(/\/circlerules/, async (msg) => {
-  const chatId = msg.chat.id;
-  logger.info(`User ${chatId} requested circle rules`, {
-    user: msg.from,
-    chat: msg.chat
   });
   
-  const rules = `🔥 *ПРАВИЛА ОРЛЯТСКОГО КРУГА* 🔥
+  await bot.sendMessage(
+    msg.chat.id, 
+    `Привет, ${userName}! Я помогу найти тексты песен под гитару. Используй команду /search название_песни для поиска.`,
+    { parse_mode: 'HTML' }
+  );
+  
+  // Инициализируем состояние пользователя, если его ещё нет
+  if (!userStates.has(userId)) {
+    userStates.set(userId, {
+      waitingForSongName: false,
+      waitingForTextSearch: false,
+      lastSongPage: null,
+      lastSearch: null
+    });
+  }
+  
+  // Регистрируем статистику использования команды
+  stats.commandsUsed['/start'] = (stats.commandsUsed['/start'] || 0) + 1;
+  stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+}
 
-1. Орлятский круг - важная завершающая часть дня/общей встречи. Не опаздывай на него. Мы тебя ждём.
-2. Пускай в круг каждого.
-3. Если вы не пустили в круг, вам важно подойти после круга и объяснить товарищу почему.
-4. Будь опрятным сам и напомни об опрятности другому.
-5. Встаём в круг мальчик-девочка (по возможности).
-6. Круг должен быть круглым. Это очень просто сделать! Просто обними товарищей сбоку и отходи максимально назад (без разрывания круга). Посмотри по сторонам. Ты должен видеть лицо каждого.
-7. Покачиваемся в противоположную от противоположной стороны сторону. Направление и темп задаёт ДКС/ДКЗ/Командир.
-8. Если песню запел и поёт один человек, то не прерываем. Не бойся и поддержи его, если знаешь часть слов!
-9. Ориентируемся по пению на человека с гитарой.
-10. Если случилось так, что два человека/две части круга запели одновременно, то оба/обе должны замолчать и уступить время третьей песне.
-11. Не пересекай круг без острой необходимости. Если круг не сомкнут, то его можно пересечь.
-12. Уважительно относись к песне и она даст тебе сил.
-13. После орлятского круга не поём орлятские песни и стараемся не шуметь.
-14. Нельзя перебивать завершающую песню.
-15. Не пропускай орлятские круги.
-
-Будь осознанным и помни о здравом смысле. 
-С ❤️ песенная служба.`;
-
-  await bot.sendMessage(chatId, rules, { parse_mode: 'Markdown' });
-  logger.info(`Successfully sent circle rules to user ${chatId}`);
-});
-
-bot.onText(/\/list/, async (msg) => {
-  const chatId = msg.chat.id;
-  logger.info(`User ${chatId} requested song list`, {
-    user: msg.from,
-    chat: msg.chat
+/**
+ * Обработка команды /help
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleHelpCommand(msg) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  
+  logger.info(`User ${userId} (${userName}) requested help`, {
+    command: '/help',
+    user: {
+      id: userId,
+      name: userName
+    }
   });
+  
+  const helpMessage = 
+    'Список доступных команд:\n\n' +
+    '/search <название песни> - поиск песни по названию\n' +
+    '/text <текст> - поиск песни по тексту\n' +
+    '/list - список всех песен\n' +
+    '/random - случайная песня\n' +
+    '/help - эта справка';
+  
+  await bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: 'HTML' });
+  
+  // Регистрируем статистику использования команды
+  stats.commandsUsed['/help'] = (stats.commandsUsed['/help'] || 0) + 1;
+  stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+}
+
+/**
+ * Обработка команды /list - получение списка всех песен
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleListCommand(msg) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  
+  logger.info(`User ${userId} (${userName}) requested song list`, {
+    command: '/list',
+    user: {
+      id: userId,
+      name: userName
+    }
+  });
+  
   try {
+    // Получаем документ
     const document = await getDocumentContent();
     
     if (!document || !document.body || !document.body.content) {
-      logger.error('Document structure is invalid:', {
-        document: document ? 'exists' : 'null',
-        body: document?.body ? 'exists' : 'null',
-        content: document?.body?.content ? 'exists' : 'null'
-      });
       throw new Error('Invalid document structure');
     }
     
-    // Находим все TITLE элементы в документе
+    // Находим все заголовки (TITLE элементы) в документе
     const titleElements = document.body.content.filter(item => 
       item && item.paragraph && 
       item.paragraph.paragraphStyle && 
@@ -1156,144 +988,18 @@ bot.onText(/\/list/, async (msg) => {
     );
     
     if (titleElements.length === 0) {
-      logger.warn('No song titles found in document');
-      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
+      await bot.sendMessage(msg.chat.id, 'В документе не найдено ни одной песни.');
       return;
     }
     
     // Ищем индекс начала песен - после правил отрядного круга
-    // Правила обычно заканчиваются фразой "Будь осознанным и помни о здравом смысле"
-    // или "С ❤️ песенная служба" или просто "C"
-    let songStartIndex = -1;
-    
-    for (let i = 0; i < titleElements.length; i++) {
-      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
-      
-      // Проверяем, является ли заголовок началом секции песен
-      // После фразы "С" обычно начинаются песни
-      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
-        songStartIndex = i;
-        break;
-      }
-    }
-    
-    if (songStartIndex === -1) {
-      // Если не нашли чёткую границу, берём все заголовки после первого
-      // (первый заголовок - правила отрядного круга)
-      songStartIndex = 1;
-    }
-    
-    // Получаем только названия песен, начиная с найденного индекса
-    const songTitles = titleElements.slice(songStartIndex).map(item => 
-      item.paragraph.elements[0].textRun.content.trim()
-    ).filter(title => 
-      // Дополнительно фильтруем пустые строки и строки, которые явно не песни
-      title && 
-      !title.includes('Правила') &&
-      !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
-      title !== 'Припев.' && 
-      title !== 'Припев:' &&
-      !title.match(/^Будь осознанным/)
-    );
-    
-    if (songTitles.length === 0) {
-      logger.warn('No song titles found after filtering rules');
-      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
-      return;
-    }
-    
-    // Добавляем нумерацию к списку песен
-    const numberedSongs = songTitles.map((song, index) => `${index + 1}. ${song}`);
-    
-    logger.info(`Found ${songTitles.length} songs after filtering rules`);
-    
-    const message = 'Список всех песен:\n\n' + numberedSongs.join('\n');
-    await bot.sendMessage(chatId, message);
-    logger.info(`Successfully sent song list to user ${chatId}`, {
-      songCount: songTitles.length
-    });
-  } catch (error) {
-    logger.error(`Error fetching songs for user ${chatId}:`, {
-      error: error.message,
-      stack: error.stack,
-      user: msg.from,
-      chat: msg.chat,
-      documentId: process.env.SONGBOOK_URL ? getDocumentIdFromUrl(process.env.SONGBOOK_URL) : 'not set'
-    });
-    await bot.sendMessage(chatId, 'Произошла ошибка при получении списка песен. Пожалуйста, убедитесь, что URL документа указан верно и у бота есть доступ к нему.');
-  }
-});
-
-bot.onText(/\/chords/, async (msg) => {
-  const chatId = msg.chat.id;
-  logger.info(`User ${chatId} started song search`, {
-    user: msg.from,
-    chat: msg.chat
-  });
-  const message = 'Выберите тип поиска:\n1. По названию\n2. По тексту';
-  const opts = {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: 'По названию', callback_data: 'search_by_name' },
-          { text: 'По тексту', callback_data: 'search_by_text' }
-        ]
-      ]
-    }
-  };
-  const sentMessage = await bot.sendMessage(chatId, message, opts);
-  
-  // Сохраняем ID сообщения, чтобы удалить его позже
-  if (!userStates.has(chatId)) {
-    userStates.set(chatId, {});
-  }
-  userStates.get(chatId).lastBotMessageId = sentMessage.message_id;
-});
-
-// Обработчик команды /random
-bot.onText(/\/random/, async (msg) => {
-  const chatId = msg.chat.id;
-  logger.info(`User ${chatId} requested random song`, {
-    user: msg.from,
-    chat: msg.chat
-  });
-  
-  try {
-    const document = await getDocumentContent();
-    
-    if (!document || !document.body || !document.body.content) {
-      logger.error('Document structure is invalid for random song');
-      throw new Error('Invalid document structure');
-    }
-    
-    // Находим все TITLE элементы в документе
-    const titleElements = document.body.content.filter(item => 
-      item && item.paragraph && 
-      item.paragraph.paragraphStyle && 
-      item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
-      item.paragraph.elements && 
-      item.paragraph.elements[0] && 
-      item.paragraph.elements[0].textRun
-    );
-    
-    if (titleElements.length === 0) {
-      logger.warn('No songs found for random selection');
-      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни в документе.');
-      return;
-    }
-    
-    // Ищем индекс начала песен - после правил отрядного круга
-    // Правила обычно заканчиваются фразой "Будь осознанным и помни о здравом смысле"
-    // или "С ❤️ песенная служба" или просто "C"
     let songStartIndex = -1;
     let currentPage = 1;
-    const songs = [];
     
     for (let i = 0; i < titleElements.length; i++) {
       const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
       
       // Проверяем, является ли заголовок началом секции песен
-      // После фразы "С" обычно начинаются песни
       if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
         songStartIndex = i;
         break;
@@ -1303,18 +1009,142 @@ bot.onText(/\/random/, async (msg) => {
     
     if (songStartIndex === -1) {
       // Если не нашли чёткую границу, берём все заголовки после первого
-      // (первый заголовок - правила отрядного круга)
       songStartIndex = 1;
       currentPage = 2; // Начинаем со второй страницы
     }
     
-    // Собираем информацию о песнях
+    // Собираем информацию о песнях, исключая правила
+    const songTitles = [];
+    
     for (let i = songStartIndex; i < titleElements.length; i++) {
       const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
       
       // Пропускаем заголовки, которые явно не песни
       if (title && 
-          !title.includes('Правила') &&
+          !title.includes('Правила') && 
+          !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
+          title !== 'Припев.' && 
+          title !== 'Припев:' &&
+          !title.match(/^Будь осознанным/)) {
+        songTitles.push({ title, page: currentPage });
+      }
+      currentPage++;
+    }
+    
+    // Если после фильтрации не осталось песен
+    if (songTitles.length === 0) {
+      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации правил.');
+      return;
+    }
+    
+    logger.info(`Found ${songTitles.length} songs after filtering rules`);
+    
+    // Формируем сообщение с нумерованным списком песен
+    let message = '<b>Список песен:</b>\n\n';
+    
+    // Добавляем все найденные песни с номерами
+    for (let i = 0; i < songTitles.length; i++) {
+      const songNumber = i + 1;
+      const songTitle = songTitles[i].title.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      
+      // Добавляем каждое название отдельной строкой с номером
+      message += `${songNumber}. ${songTitle}\n`;
+      
+      // Если сообщение становится слишком длинным, разбиваем его на части
+      if (message.length > MAX_MESSAGE_LENGTH - 200 && i < songTitles.length - 1) {
+        await bot.sendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
+        message = '<b>Продолжение списка песен:</b>\n\n';
+      }
+    }
+    
+    // Отправляем финальное сообщение (или единственное, если список был коротким)
+    if (message.length > 0) {
+      await bot.sendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
+    }
+    
+    // Регистрируем статистику использования команды
+    stats.commandsUsed['/list'] = (stats.commandsUsed['/list'] || 0) + 1;
+    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+  } catch (error) {
+    logger.error('Error handling list command:', {
+      error: error.message,
+      stack: error.stack,
+      userId
+    });
+    
+    await bot.sendMessage(msg.chat.id, 'Произошла ошибка при получении списка песен. Пожалуйста, попробуйте позже.');
+  }
+}
+
+/**
+ * Обработка команды /random - получение случайной песни
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleRandomCommand(msg) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  
+  logger.info(`User ${userId} (${userName}) requested a random song`, {
+    command: '/random',
+    user: {
+      id: userId,
+      name: userName
+    }
+  });
+  
+  try {
+    // Получаем документ
+    const document = await getDocumentContent();
+    
+    if (!document || !document.body || !document.body.content) {
+      throw new Error('Invalid document structure');
+    }
+    
+    // Находим все заголовки (TITLE элементы) в документе
+    const titleElements = document.body.content.filter(item => 
+      item && item.paragraph && 
+      item.paragraph.paragraphStyle && 
+      item.paragraph.paragraphStyle.namedStyleType === 'TITLE' &&
+      item.paragraph.elements && 
+      item.paragraph.elements[0] && 
+      item.paragraph.elements[0].textRun
+    );
+    
+    if (titleElements.length === 0) {
+      await bot.sendMessage(msg.chat.id, 'В документе не найдено ни одной песни.');
+      return;
+    }
+    
+    // Ищем индекс начала песен - после правил отрядного круга
+    let songStartIndex = -1;
+    let currentPage = 1;
+    
+    for (let i = 0; i < titleElements.length; i++) {
+      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+      
+      // Проверяем, является ли заголовок началом секции песен
+      if (title === 'С' || title === 'C' || /^Алые паруса/.test(title)) {
+        songStartIndex = i;
+        break;
+      }
+      currentPage++;
+    }
+    
+    if (songStartIndex === -1) {
+      // Если не нашли чёткую границу, берём все заголовки после первого
+      songStartIndex = 1;
+      currentPage = 2; // Начинаем со второй страницы
+    }
+    
+    // Собираем информацию о песнях, исключая правила
+    const songs = [];
+    
+    for (let i = songStartIndex; i < titleElements.length; i++) {
+      const title = titleElements[i].paragraph.elements[0].textRun.content.trim();
+      
+      // Пропускаем заголовки, которые явно не песни
+      if (title && 
+          !title.includes('Правила') && 
           !title.match(/^\d+\./) && // Не начинаются с номера и точки (правила)
           title !== 'Припев.' && 
           title !== 'Припев:' &&
@@ -1324,199 +1154,592 @@ bot.onText(/\/random/, async (msg) => {
       currentPage++;
     }
     
+    // Если после фильтрации не осталось песен
     if (songs.length === 0) {
-      logger.warn('No valid songs found for random selection after filtering');
-      await bot.sendMessage(chatId, 'Не удалось найти ни одной песни для случайного выбора.');
+      await bot.sendMessage(msg.chat.id, 'В документе не найдено песен после фильтрации правил.');
       return;
     }
     
     // Выбираем случайную песню
     const randomIndex = Math.floor(Math.random() * songs.length);
-    const selectedSong = songs[randomIndex];
+    const randomSong = songs[randomIndex];
     
-    logger.debug('Selected random song', { 
-      index: randomIndex, 
-      title: selectedSong.title, 
-      page: selectedSong.page,
-      totalSongs: songs.length
-    });
-    
-    // Получаем содержимое песни
+    // Получаем содержимое случайной песни
     const documentId = getDocumentIdFromUrl(process.env.SONGBOOK_URL);
-    const songContent = await getSongContent(documentId, selectedSong.page);
+    const songContent = await getSongContent(documentId, randomSong.page);
     
     if (!songContent) {
-      logger.error('Empty song content returned', { 
-        title: selectedSong.title, 
-        page: selectedSong.page 
-      });
-      throw new Error('Song content is empty');
+      await bot.sendMessage(
+        msg.chat.id, 
+        `К сожалению, не удалось загрузить выбранную песню (${randomSong.title}). Пожалуйста, попробуйте еще раз.`
+      );
+      return;
     }
     
-    // Разделяем название и текст песни
-    const contentLines = songContent.split('\n');
-    let songTitle = selectedSong.title;
-    let songTextOnly = contentLines.slice(1).join('\n').trim();
+    // Сохраняем последнюю песню в состоянии пользователя
+    userStates.set(userId, userStates.get(userId) || {});
+    userStates.get(userId).lastSongPage = randomSong.page;
     
-    // Отправляем песню в отформатированном виде
-    const success = await sendFormattedSong(chatId, songTitle, songTextOnly, selectedSong.page, true);
+    // Отправляем песню пользователю
+    await sendFormattedSong(msg.chat.id, randomSong.title, songContent, true);
     
-    if (!success) {
-      throw new Error('Failed to send formatted song');
-    }
+    // Регистрируем статистику использования команды
+    stats.commandsUsed['/random'] = (stats.commandsUsed['/random'] || 0) + 1;
+    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
   } catch (error) {
-    logger.error(`Error sending random song to user ${chatId}:`, {
+    logger.error('Error handling random command:', {
       error: error.message,
       stack: error.stack,
-      user: msg.from,
-      chat: msg.chat
+      userId
     });
-    await bot.sendMessage(chatId, 'Произошла ошибка при получении случайной песни. Пожалуйста, убедитесь, что URL документа указан верно и у бота есть доступ к нему.');
-  }
-});
-
-// Добавляем функцию для разделения длинных сообщений (после определения bot)
-// Максимальная длина сообщения Telegram - 4096 символов
-const MAX_MESSAGE_LENGTH = 4000; // Оставляем запас для безопасности
-
-// Функция для разделения сообщения на части и последовательной отправки
-async function sendLongMessage(chatId, text, options = {}) {
-  if (!text) {
-    logger.error('Attempted to send empty message');
-    return;
-  }
-  
-  if (text.length <= MAX_MESSAGE_LENGTH) {
-    return await bot.sendMessage(chatId, text, options);
-  }
-  
-  logger.info(`Splitting long message (${text.length} chars) into parts`);
-  
-  // Разбиваем текст на части, стараясь делать это по строкам
-  const chunks = [];
-  let currentChunk = '';
-  
-  const lines = text.split('\n');
-  for (const line of lines) {
-    if (currentChunk.length + line.length + 1 > MAX_MESSAGE_LENGTH) {
-      chunks.push(currentChunk);
-      currentChunk = line + '\n';
-    } else {
-      currentChunk += line + '\n';
-    }
-  }
-  
-  if (currentChunk) {
-    chunks.push(currentChunk);
-  }
-  
-  logger.debug(`Message split into ${chunks.length} parts`);
-  
-  // Отправляем части сообщения последовательно
-  let lastMessageSent = null;
-  for (let i = 0; i < chunks.length; i++) {
-    const chunkOptions = {...options};
     
-    // Добавляем номер части, если их несколько
-    if (chunks.length > 1) {
-      const chunkText = `Часть ${i + 1}/${chunks.length}\n\n${chunks[i]}`;
-      lastMessageSent = await bot.sendMessage(chatId, chunkText, chunkOptions);
-    } else {
-      lastMessageSent = await bot.sendMessage(chatId, chunks[i], chunkOptions);
-    }
+    await bot.sendMessage(msg.chat.id, 'Произошла ошибка при получении случайной песни. Пожалуйста, попробуйте позже.');
   }
-  
-  return lastMessageSent;
 }
 
-// Function to send formatted song content with improved error handling
-async function sendFormattedSong(chatId, songTitle, songText, pageNumber, isRandom = false) {
+/**
+ * Обработка команды /search - поиск песни по названию
+ * @param {Object} msg - Сообщение от пользователя
+ * @param {string} match - Результат регулярного выражения
+ */
+async function handleSearchCommand(msg, match) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  
+  // Определяем поисковый запрос из текста сообщения
+  let query = '';
+  
+  // Если пришло сообщение с параметром сразу (например, /search Алые паруса)
+  if (match && match[1]) {
+    query = match[1].trim();
+  }
+  
+  logger.info(`User ${userId} (${userName}) searching for song by name`, {
+    command: '/search',
+    query,
+    user: {
+      id: userId,
+      name: userName
+    }
+  });
+  
+  if (query) {
+    // Если запрос передан, осуществляем поиск
+    await performSongSearch(msg, query, false);
+  } else {
+    // Если запрос не передан, запрашиваем название песни
+    await bot.sendMessage(msg.chat.id, 'Введите название песни для поиска:');
+    
+    // Устанавливаем флаг ожидания названия песни для данного пользователя
+    userStates.set(userId, userStates.get(userId) || {});
+    userStates.get(userId).waitingForSongName = true;
+    userStates.get(userId).waitingForTextSearch = false;
+  }
+  
+  // Регистрируем статистику использования команды
+  stats.commandsUsed['/search'] = (stats.commandsUsed['/search'] || 0) + 1;
+  stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+}
+
+/**
+ * Обработка команды /text - поиск песни по тексту
+ * @param {Object} msg - Сообщение от пользователя
+ * @param {string} match - Результат регулярного выражения
+ */
+async function handleTextCommand(msg, match) {
+  const userId = msg.from.id;
+  const userName = msg.from.first_name;
+  
+  // Определяем поисковый запрос из текста сообщения
+  let query = '';
+  
+  // Если пришло сообщение с параметром сразу (например, /text Уеду к северному)
+  if (match && match[1]) {
+    query = match[1].trim();
+  }
+  
+  logger.info(`User ${userId} (${userName}) searching for song by text`, {
+    command: '/text',
+    query,
+    user: {
+      id: userId,
+      name: userName
+    }
+  });
+  
+  if (query) {
+    // Если запрос передан, осуществляем поиск по тексту
+    await performSongSearch(msg, query, true);
+  } else {
+    // Если запрос не передан, запрашиваем текст для поиска
+    await bot.sendMessage(msg.chat.id, 'Введите фрагмент текста песни для поиска:');
+    
+    // Устанавливаем флаг ожидания текста для данного пользователя
+    userStates.set(userId, userStates.get(userId) || {});
+    userStates.get(userId).waitingForSongName = false;
+    userStates.get(userId).waitingForTextSearch = true;
+  }
+  
+  // Регистрируем статистику использования команды
+  stats.commandsUsed['/text'] = (stats.commandsUsed['/text'] || 0) + 1;
+  stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+}
+
+/**
+ * Выполнение поиска песни
+ * @param {Object} msg - Сообщение от пользователя
+ * @param {string} query - Поисковый запрос
+ * @param {boolean} searchByText - Флаг поиска по тексту (если false - по названию)
+ */
+async function performSongSearch(msg, query, searchByText = false) {
   try {
-    logger.debug(`Sending formatted song to user ${chatId}`, {
-      songTitle,
-      textLength: songText.length
-    });
-    
-    // Извлекаем информацию о песне (аккорды, название, примечания)
-    const songInfo = extractSongInfo(songText);
-    
-    // Готовим текст сообщения
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
     let messageText = '';
     
-    // Если это случайная песня, добавляем эмодзи и другой заголовок
-    if (isRandom) {
-      // Список эмодзи для случайного выбора
-      const emojis = ['🎸', '🎵', '🎼', '🎶', '🎤', '🎧', '🎹', '🥁'];
-      const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
-      messageText = `${randomEmoji} Случайная песня: ${songTitle}`;
-    } else {
-      messageText = songTitle;
-    }
+    // Отправляем сообщение о том, что поиск начат
+    const waitMessage = await bot.sendMessage(
+      chatId, 
+      searchByText ? 'Ищу песню по тексту...' : 'Ищу песню по названию...'
+    );
     
-    // Добавляем информацию об авторе, если есть
-    if (songInfo.author) {
-      messageText += `\nАвтор: ${songInfo.author}`;
-    }
+    // Выполняем поиск песен
+    const songs = await searchSongs(query, searchByText);
     
-    // Добавляем информацию о ритме, если есть
-    if (songInfo.rhythm) {
-      messageText += `\nРитм: ${songInfo.rhythm}`;
-    }
-    
-    // Добавляем примечания, если есть
-    if (songInfo.notes) {
-      messageText += `\nПримечание: ${songInfo.notes}`;
-    }
-    
-    // Отправляем информацию о песне
-    await bot.sendMessage(chatId, messageText);
-    
-    // Сохраняем содержимое песни для возможности копирования
-    const originalText = songInfo.cleanText || songText;
-    userSongCache.set(`song_${pageNumber}`, originalText);
-    lastSongPageMap.set(chatId, pageNumber);
-    
-    // Опции для форматированного вывода текста песни с кнопкой копирования
-    const opts = {
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: 'копировать', callback_data: `copy_${pageNumber}` }]
-        ]
-      }
+    // Сохраняем последний поисковый запрос в состоянии пользователя
+    userStates.set(userId, userStates.get(userId) || {});
+    userStates.get(userId).lastSearch = {
+      query: query,
+      searchByText: searchByText
     };
     
-    // Отправляем текст песни в формате моноширинного текста, сохраняя оригинальное форматирование
-    const formattedText = formatSongForDisplay(originalText);
-    const songMessage = await bot.sendMessage(chatId, `<pre>${formattedText}</pre>`, opts);
+    // Обработка результатов поиска
+    if (songs.length === 0) {
+      messageText = 'К сожалению, по вашему запросу ничего не найдено. Попробуйте изменить запрос или воспользуйтесь командой /list для просмотра всех доступных песен.';
+      await bot.editMessageText(messageText, {
+        chat_id: chatId,
+        message_id: waitMessage.message_id
+      });
+      
+      logger.info(`No songs found for query "${query}"`, {
+        searchByText,
+        userId
+      });
+      return;
+    }
     
-    // Добавляем кнопку "Открыть полный аккордник"
-    await bot.sendMessage(chatId, `<b>Google Docs</b>\nАккордник Версия ${new Date().toLocaleDateString('ru-RU')}.docx`, {
+    // Если найдена только одна песня, отправляем её сразу
+    if (songs.length === 1) {
+      const song = songs[0];
+      
+      // Удаляем предыдущее сообщение о поиске
+      await bot.deleteMessage(chatId, waitMessage.message_id);
+      
+      // Отправляем найденную песню
+      await sendFormattedSong(chatId, song.title, song.content);
+      
+      // Сохраняем номер страницы последней отправленной песни
+      userStates.get(userId).lastSongPage = song.page;
+      
+      logger.info(`Found and sent one song for query "${query}"`, {
+        searchByText,
+        userId,
+        songTitle: song.title
+      });
+      return;
+    }
+    
+    // Если найдено несколько песен, отправляем список с кнопками выбора
+    messageText = `Найдено ${songs.length} песен. Выберите нужную:`;
+    
+    // Создаем клавиатуру с названиями песен
+    const keyboard = songs.map(song => {
+      return [{
+        text: song.title,
+        callback_data: `song_${song.page}`
+      }];
+    });
+    
+    // Отправляем сообщение с вариантами выбора
+    await bot.editMessageText(messageText, {
+      chat_id: chatId,
+      message_id: waitMessage.message_id,
       reply_markup: {
-        inline_keyboard: [
-          [{ text: 'Открыть полный аккордник', url: process.env.SONGBOOK_URL }]
-        ]
-      },
-      parse_mode: 'HTML'
+        inline_keyboard: keyboard
+      }
     });
     
-    // Обновляем статистику просмотров песни
-    stats.songViews[songTitle] = (stats.songViews[songTitle] || 0) + 1;
-    
-    logger.info(`Successfully sent song content to user ${chatId}`, {
-      pageNumber,
-      contentLength: formattedText.length,
-      songTitle,
-      hasAuthor: !!songInfo.author
+    logger.info(`Found ${songs.length} songs for query "${query}"`, {
+      searchByText,
+      userId,
+      songTitles: songs.map(s => s.title)
     });
-    
-    return true;
   } catch (error) {
-    logger.error(`Error sending formatted song to user ${chatId}:`, {
+    logger.error('Error performing song search:', {
       error: error.message,
       stack: error.stack,
-      songTitle
+      query,
+      searchByText,
+      userId: msg.from.id
     });
-    return false;
+    
+    await bot.sendMessage(
+      msg.chat.id, 
+      'Произошла ошибка при поиске. Пожалуйста, попробуйте позже или воспользуйтесь командой /list для просмотра всех доступных песен.'
+    );
   }
 }
+
+/**
+ * Обработка обычных текстовых сообщений для поиска песен
+ * @param {Object} msg - Сообщение от пользователя
+ */
+async function handleTextMessage(msg) {
+  const userId = msg.from.id;
+  const text = msg.text.trim();
+  
+  // Если у пользователя активен режим ожидания ввода названия песни
+  if (userStates.has(userId) && userStates.get(userId).waitingForSongName) {
+    userStates.get(userId).waitingForSongName = false;
+    
+    logger.info(`User ${userId} provided song name for search: "${text}"`, {
+      messageType: 'text',
+      user: {
+        id: userId,
+        name: msg.from.first_name
+      }
+    });
+    
+    // Выполняем поиск песни по названию
+    await performSongSearch(msg, text, false);
+  }
+  // Если у пользователя активен режим ожидания ввода текста для поиска
+  else if (userStates.has(userId) && userStates.get(userId).waitingForTextSearch) {
+    userStates.get(userId).waitingForTextSearch = false;
+    
+    logger.info(`User ${userId} provided text for song search: "${text}"`, {
+      messageType: 'text',
+      user: {
+        id: userId,
+        name: msg.from.first_name
+      }
+    });
+    
+    // Выполняем поиск песни по тексту
+    await performSongSearch(msg, text, true);
+  }
+  // Обычное текстовое сообщение, обрабатываем как поиск по названию песни
+  else {
+    logger.info(`User ${userId} sent text message: "${text}"`, {
+      messageType: 'text',
+      user: {
+        id: userId,
+        name: msg.from.first_name
+      }
+    });
+    
+    // Выполняем поиск песни по названию
+    await performSongSearch(msg, text, false);
+  }
+}
+
+/**
+ * Обработка нажатий на встроенные кнопки
+ * @param {Object} callback - Callback query от пользователя
+ */
+async function handleCallbackQuery(callback) {
+  const userId = callback.from.id;
+  const userName = callback.from.first_name;
+  const data = callback.data;
+  const chatId = callback.message.chat.id;
+  
+  logger.info(`User ${userId} (${userName}) clicked button: ${data}`, {
+    messageType: 'callbackQuery',
+    user: {
+      id: userId,
+      name: userName
+    }
+  });
+  
+  // Проверяем, что callback является запросом на получение песни
+  if (data.startsWith('song_')) {
+    const pageNumber = parseInt(data.split('_')[1], 10);
+    
+    // Пытаемся скачать песню по номеру страницы
+    try {
+      const documentId = getDocumentIdFromUrl(process.env.SONGBOOK_URL);
+      const songContent = await getSongContent(documentId, pageNumber);
+      
+      if (!songContent) {
+        await bot.answerCallbackQuery(callback.id, {
+          text: 'Не удалось загрузить песню. Пожалуйста, попробуйте еще раз или выберите другую песню.',
+          show_alert: true
+        });
+        return;
+      }
+      
+      // Извлекаем заголовок песни из содержимого
+      const songTitle = songContent.split('\n')[0].trim();
+      
+      // Сохраняем номер страницы последней отправленной песни
+      userStates.set(userId, userStates.get(userId) || {});
+      userStates.get(userId).lastSongPage = pageNumber;
+      
+      // Отправляем песню пользователю
+      await sendFormattedSong(chatId, songTitle, songContent);
+      
+      // Удаляем сообщение со списком песен
+      await bot.deleteMessage(chatId, callback.message.message_id);
+      
+      // Сообщаем, что запрос обработан успешно
+      await bot.answerCallbackQuery(callback.id);
+    } catch (error) {
+      logger.error('Error handling callback query for song selection:', {
+        error: error.message,
+        stack: error.stack,
+        userId,
+        pageNumber
+      });
+      
+      await bot.answerCallbackQuery(callback.id, {
+        text: 'Произошла ошибка при загрузке песни. Пожалуйста, попробуйте позже.',
+        show_alert: true
+      });
+    }
+    
+    // Регистрируем статистику использования callback-кнопок
+    stats.callbacksUsed['song_selection'] = (stats.callbacksUsed['song_selection'] || 0) + 1;
+    stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
+  }
+}
+
+/**
+ * Отправляет отформатированную песню пользователю
+ * @param {number} chatId - ID чата для отправки
+ * @param {string} title - Название песни
+ * @param {string} content - Содержимое песни
+ * @param {boolean} isRandom - Признак случайной песни
+ */
+async function sendFormattedSong(chatId, title, content, isRandom = false) {
+  try {
+    if (!content) {
+      await bot.sendMessage(chatId, 'Не удалось загрузить содержимое песни.');
+      return;
+    }
+    
+    // Извлекаем информацию о песне (автор, ритм, примечания)
+    const songInfo = extractSongInfo(content);
+    
+    // Форматируем текст песни для отображения
+    const formattedText = formatSongForDisplay(content);
+    
+    // Определяем текст сообщения
+    let messageText = '';
+    
+    // Для случайной песни добавляем соответствующий заголовок
+    if (isRandom) {
+      messageText = `🎲 <b>Случайная песня</b>\n\n`;
+    }
+    
+    // Добавляем заголовок песни без лишнего вступления
+    messageText += `<b>${title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</b>`;
+    
+    // Добавляем информацию об авторе, если она есть
+    if (songInfo.author) {
+      messageText += `\n<i>${songInfo.author.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</i>`;
+    }
+    
+    // Добавляем информацию о ритме, если она есть
+    if (songInfo.rhythm) {
+      messageText += `\n<i>Ритм: ${songInfo.rhythm.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</i>`;
+    }
+    
+    // Добавляем примечания, если они есть
+    if (songInfo.notes) {
+      messageText += `\n<i>Примечание: ${songInfo.notes.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</i>`;
+    }
+    
+    // Добавляем основной текст песни
+    messageText += `\n\n${formattedText}`;
+    
+    // Проверяем длину сообщения
+    if (messageText.length > MAX_MESSAGE_LENGTH) {
+      // Разбиваем на части и отправляем по частям
+      await sendLongMessage(chatId, messageText);
+    } else {
+      // Отправляем обычное сообщение
+      await bot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML'
+      });
+    }
+    
+    // Увеличиваем счетчик просмотров для данной песни
+    stats.songViews[title] = (stats.songViews[title] || 0) + 1;
+  } catch (error) {
+    logger.error('Error sending formatted song:', {
+      error: error.message,
+      stack: error.stack,
+      chatId,
+      title
+    });
+    
+    await bot.sendMessage(
+      chatId, 
+      'Произошла ошибка при отправке песни. Пожалуйста, попробуйте позже.'
+    );
+  }
+}
+
+/**
+ * Отправляет длинное сообщение, разбивая его на части
+ * @param {number} chatId - ID чата для отправки
+ * @param {string} text - Длинное сообщение
+ */
+async function sendLongMessage(chatId, text) {
+  try {
+    // Определяем максимальную длину одного сообщения (с запасом)
+    const maxLength = MAX_MESSAGE_LENGTH - 300;
+    
+    // Если сообщение укладывается в лимит, отправляем его напрямую
+    if (text.length <= maxLength) {
+      await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+      return;
+    }
+    
+    // Разбиваем текст на строки
+    const lines = text.split('\n');
+    let currentPart = '';
+    
+    // Определяем, является ли первая часть заголовком
+    let firstLines = [];
+    let titleLine = '';
+    
+    // Ищем заголовок и метаданные (до первой пустой строки)
+    for (let i = 0; i < Math.min(10, lines.length); i++) {
+      if (lines[i].trim() === '') {
+        break;
+      }
+      
+      if (i === 0) {
+        titleLine = lines[i];
+      }
+      
+      firstLines.push(lines[i]);
+    }
+    
+    // Собираем заголовок и метаданные
+    const headerText = firstLines.join('\n');
+    currentPart = headerText + '\n\n';
+    
+    // Проходим по оставшимся строкам и собираем части сообщения
+    for (let i = firstLines.length; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Проверяем, не будет ли превышен лимит при добавлении строки
+      if (currentPart.length + line.length + 1 > maxLength) {
+        // Если часть не пустая, отправляем её
+        if (currentPart.trim()) {
+          await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
+        }
+        
+        // Начинаем новую часть (первая часть каждой следующей части - это заголовок)
+        currentPart = titleLine ? `<b>[Продолжение] ${titleLine.replace(/<b>|<\/b>/g, '')}</b>\n\n${line}\n` : line + '\n';
+      } else {
+        // Добавляем строку к текущей части
+        currentPart += line + '\n';
+      }
+    }
+    
+    // Отправляем последнюю часть, если есть
+    if (currentPart.trim()) {
+      await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
+    }
+  } catch (error) {
+    logger.error('Error sending long message:', {
+      error: error.message,
+      stack: error.stack,
+      chatId
+    });
+    
+    await bot.sendMessage(
+      chatId, 
+      'Произошла ошибка при отправке сообщения. Пожалуйста, попробуйте позже.'
+    );
+  }
+}
+
+/**
+ * Настройка webhook с использованием ngrok или заданного URL
+ * @returns {Promise<void>}
+ */
+async function setupWebhook() {
+  try {
+    // Сначала удаляем существующий webhook для очистки предыдущих сессий
+    await bot.deleteWebHook();
+    logger.info('Существующий webhook удален');
+    
+    // Проверяем, предоставлен ли URL webhook напрямую
+    if (process.env.WEBHOOK_URL) {
+      await bot.setWebHook(process.env.WEBHOOK_URL);
+      logger.info('Новый webhook установлен из окружения:', process.env.WEBHOOK_URL);
+      
+      const webhookInfo = await bot.getWebHookInfo();
+      logger.info('Информация о webhook:', webhookInfo);
+      return;
+    }
+    
+    // В противном случае используем ngrok
+    // Запускаем ngrok
+    const ngrokPath = path.join(__dirname, '..', 'ngrok.exe'); // Настройте путь при необходимости
+    const ngrok = exec(`${ngrokPath} http 3333`, (error, stdout, stderr) => {
+      if (error) {
+        logger.error('Ошибка запуска ngrok:', error);
+        return;
+      }
+      logger.info('Ngrok запущен:', stdout);
+    });
+
+    // Ждем запуска ngrok
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Получаем URL ngrok
+    const response = await fetch('http://localhost:4040/api/tunnels');
+    const data = await response.json();
+    const ngrokUrl = data.tunnels[0].public_url;
+
+    // Устанавливаем новый webhook
+    const webhookUrl = `${ngrokUrl}/api/webhook`;
+    await bot.setWebHook(webhookUrl);
+    logger.info('Новый webhook установлен с ngrok:', webhookUrl);
+
+    // Получаем информацию о webhook
+    const webhookInfo = await bot.getWebHookInfo();
+    logger.info('Информация о webhook:', webhookInfo);
+
+    // Сохраняем процесс ngrok для очистки
+    process.ngrok = ngrok;
+  } catch (error) {
+    logger.error('Ошибка настройки webhook:', error);
+    throw error;
+  }
+}
+
+// Очистка при выходе
+process.on('SIGINT', () => {
+  if (process.ngrok) {
+    process.ngrok.kill();
+  }
+  process.exit();
+});
+
+// Endpoint для webhook
+app.post('/api/webhook', (req, res) => {
+  try {
+    bot.handleUpdate(req.body);
+    logger.debug('Webhook-обновление обработано');
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('Ошибка обработки webhook:', error);
+    res.sendStatus(500);
+  }
+});
