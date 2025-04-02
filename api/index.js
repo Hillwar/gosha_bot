@@ -768,8 +768,11 @@ function formatSongForDisplay(title, author, text) {
       .replace(/>/g, '&gt;');
   };
   
+  // Очищаем название от символов # ♭
+  const cleanTitle = title.replace(/[#♭]/g, '').trim();
+  
   // Форматируем заголовок и автора
-  let result = `<b>${escapeHtml(title)}</b>\n`;
+  let result = `<b>${escapeHtml(cleanTitle)}</b>\n`;
   
   if (author && author.trim()) {
     result += `<i>${escapeHtml(author)}</i>\n\n`;
@@ -784,7 +787,7 @@ function formatSongForDisplay(title, author, text) {
   
   // Пропускаем первые строки, которые повторяют название и автора
   let skipLines = 0;
-  if (lines.length > 0 && lines[0].trim() === title) {
+  if (lines.length > 0 && (lines[0].trim() === title || lines[0].trim() === cleanTitle)) {
     skipLines++;
     if (lines.length > 1 && author && lines[1].trim() === author) {
       skipLines++;
