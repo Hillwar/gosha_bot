@@ -581,6 +581,11 @@ async function handleTextMessage(msg) {
     userStates.get(userId).waitingForTextSearch = false;
     await performSongSearch(msg, text, true);
   }
+  // Режим ожидания текста для поиска аккордов
+  else if (userStates.has(userId) && userStates.get(userId).waitingForChordsSearch) {
+    userStates.get(userId).waitingForChordsSearch = false;
+    await searchSongsForChords(msg, text);
+  }
   // Обычное сообщение - поиск по названию
   else {
     await performSongSearch(msg, text, false);
@@ -1075,79 +1080,44 @@ async function handleChordsCommand(msg, match) {
   try {
     if (query) {
       // Если указано название песни, ищем её
-      const { songs } = await fetchSongbookContent();
-      let foundSongs = songs.filter(song => 
-        song.title.toLowerCase().includes(query.toLowerCase())
-      );
-      
-      if (foundSongs.length === 0) {
-        await bot.sendMessage(chatId, 'Песня не найдена. Попробуйте другое название.');
-        return;
-      }
-      
-      if (foundSongs.length > 1) {
-        // Если найдено несколько песен, показываем список
-        let message = 'Найдено несколько песен. Выберите нужную:\n\n';
-        foundSongs = foundSongs.slice(0, 10); // Ограничиваем количество результатов
-        
-        foundSongs.forEach((song, index) => {
-          message += `${index + 1}. ${song.title}\n`;
-        });
-        
-        await bot.sendMessage(chatId, message, {
-          reply_markup: {
-            inline_keyboard: foundSongs.map((song, index) => [{
-              text: song.title,
-              callback_data: `chords_${index}`
-            }])
-          }
-        });
-        
-        // Сохраняем для быстрого доступа
-        userSongCache.set(userId, foundSongs);
-        return;
-      }
-      
-      // Если найдена одна песня, показываем её аккорды
-      const song = foundSongs[0];
-      const chords = extractChords(song.fullText);
-      
-      if (chords.length === 0) {
-        await bot.sendMessage(chatId, `Аккорды для песни "${song.title}" не найдены.`);
-      } else {
-        await bot.sendMessage(chatId, 
-          `Аккорды для песни "${song.title}":\n\n${chords.join(', ')}`,
-          { parse_mode: 'HTML' }
-        );
-      }
+      await searchSongsForChords(msg, query);
     } else {
-      // Если название не указано, пробуем использовать последнюю просмотренную песню
+      // Если название не указано, проверяем последнюю песню или предлагаем ввести
       const userState = userStates.get(userId);
       
-      if (!userState || !userState.lastSongTitle) {
-        await bot.sendMessage(chatId, 'Укажите название песни после команды /chords или сначала просмотрите какую-нибудь песню.');
-        return;
-      }
-      
-      // Ищем последнюю просмотренную песню
-      const { songs } = await fetchSongbookContent();
-      const lastSong = songs.find(s => s.title === userState.lastSongTitle);
-      
-      if (!lastSong) {
-        await bot.sendMessage(chatId, 'Не удалось найти последнюю просмотренную песню.');
-        return;
-      }
-      
-      // Показываем аккорды
-      const chords = extractChords(lastSong.fullText);
-      
-      if (chords.length === 0) {
-        await bot.sendMessage(chatId, `Аккорды для песни "${lastSong.title}" не найдены.`);
+      if (userState && userState.lastSongTitle) {
+        // Есть последняя просмотренная песня
+        const { songs } = await fetchSongbookContent();
+        const lastSong = songs.find(s => s.title === userState.lastSongTitle);
+        
+        if (lastSong) {
+          const chords = extractChords(lastSong.fullText);
+          
+          if (chords.length === 0) {
+            await bot.sendMessage(chatId, `Аккорды для песни "${lastSong.title}" не найдены.`);
+          } else {
+            await bot.sendMessage(chatId, 
+              `Аккорды для песни "${lastSong.title}":\n\n${chords.join(', ')}`,
+              { parse_mode: 'HTML' }
+            );
+          }
+        } else {
+          // Предлагаем ввести запрос
+          await bot.sendMessage(chatId, 'Введите название песни или фрагмент текста для поиска аккордов:');
+          
+          userStates.set(userId, userStates.get(userId) || {});
+          userStates.get(userId).waitingForChordsSearch = true;
+          userStates.get(userId).waitingForSongName = false;
+          userStates.get(userId).waitingForTextSearch = false;
+        }
       } else {
-        await bot.sendMessage(chatId, 
-          `Аккорды для песни "${lastSong.title}":\n\n${chords.join(', ')}`,
-          { parse_mode: 'HTML' }
-        );
+        // Предлагаем ввести запрос
+        await bot.sendMessage(chatId, 'Введите название песни или фрагмент текста для поиска аккордов:');
+        
+        userStates.set(userId, userStates.get(userId) || {});
+        userStates.get(userId).waitingForChordsSearch = true;
+        userStates.get(userId).waitingForSongName = false;
+        userStates.get(userId).waitingForTextSearch = false;
       }
     }
     
@@ -1156,6 +1126,92 @@ async function handleChordsCommand(msg, match) {
     stats.userActivity[userId] = (stats.userActivity[userId] || 0) + 1;
   } catch (error) {
     console.error('Ошибка при получении аккордов:', error.message);
+    await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
+  }
+}
+
+/**
+ * Поиск песен для отображения аккордов
+ */
+async function searchSongsForChords(msg, query) {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  
+  try {
+    // Сообщение о поиске
+    const waitMessage = await bot.sendMessage(chatId, 'Ищу песни с аккордами...');
+    
+    // Получаем список песен
+    const { songs } = await fetchSongbookContent();
+    
+    // Комплексный поиск по названию, тексту и автору
+    let foundSongs = songs.filter(song => {
+      const titleMatch = song.title.toLowerCase().includes(query.toLowerCase());
+      const textMatch = song.fullText.toLowerCase().includes(query.toLowerCase());
+      const authorMatch = song.author && song.author.toLowerCase().includes(query.toLowerCase());
+      
+      return titleMatch || textMatch || authorMatch;
+    });
+    
+    // Фильтруем песни - оставляем только те, у которых есть аккорды
+    foundSongs = foundSongs.filter(song => {
+      const chords = extractChords(song.fullText);
+      return chords.length > 0;
+    });
+    
+    // Удаляем сообщение загрузки
+    try {
+      await bot.deleteMessage(chatId, waitMessage.message_id);
+    } catch (error) {
+      console.error('Ошибка удаления сообщения:', error.message);
+    }
+    
+    // Нет результатов
+    if (foundSongs.length === 0) {
+      await bot.sendMessage(chatId, 'К сожалению, песен с аккордами по вашему запросу не найдено.');
+      return;
+    }
+    
+    // Одна песня - отправляем аккорды сразу
+    if (foundSongs.length === 1) {
+      const song = foundSongs[0];
+      const chords = extractChords(song.fullText);
+      
+      // Сохраняем последнюю песню
+      userStates.set(userId, userStates.get(userId) || {});
+      userStates.get(userId).lastSongTitle = song.title;
+      
+      await bot.sendMessage(chatId, 
+        `Аккорды для песни "${song.title}":\n\n${chords.join(', ')}`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+    
+    // Несколько песен - список с кнопками
+    // Ограничиваем количество результатов
+    const maxResults = Math.min(foundSongs.length, 10);
+    const songsToShow = foundSongs.slice(0, maxResults);
+    
+    let message = `Найдено ${foundSongs.length} песен с аккордами${maxResults < foundSongs.length ? ' (показаны первые ' + maxResults + ')' : ''}. Выберите нужную:\n\n`;
+    
+    songsToShow.forEach((song, index) => {
+      message += `${index + 1}. ${song.title}${song.author ? ' - ' + song.author.substring(0, 30) : ''}\n`;
+    });
+    
+    await bot.sendMessage(chatId, message, {
+      reply_markup: {
+        inline_keyboard: songsToShow.map((song, index) => [{
+          text: song.title,
+          callback_data: `chords_${index}`
+        }])
+      }
+    });
+    
+    // Сохраняем для быстрого доступа
+    userSongCache.set(userId, songsToShow);
+  } catch (error) {
+    console.error('Ошибка поиска для аккордов:', error.message);
     await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
   }
 }
