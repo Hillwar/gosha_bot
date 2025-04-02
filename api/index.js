@@ -50,10 +50,7 @@ bot.onText(/\/start/, handleStartCommand);
 bot.onText(/\/help/, handleHelpCommand);
 bot.onText(/\/list/, handleListCommand);
 bot.onText(/\/random/, handleRandomCommand);
-bot.onText(/\/search(?:\s+(.+))?/, (msg, match) => handleSearchCommand(msg, match, false));
-bot.onText(/\/text(?:\s+(.+))?/, (msg, match) => handleSearchCommand(msg, match, true));
-bot.onText(/\/last/, handleLastCommand);
-bot.onText(/\/serach(?:\s+(.+))?/, handleAdvancedSearchCommand);
+bot.onText(/\/search(?:\s+(.+))?/, handleSearchCommand);
 
 // Регистрация обработчика текстовых сообщений
 bot.on('message', msg => { if (msg.text && !msg.text.startsWith('/')) handleTextMessage(msg); });
@@ -87,11 +84,12 @@ async function getSongs() {
     
     for (const element of document.body.content) {
       if (element.paragraph) {
-        const { text, isSongTitle } = extractParagraphText(element.paragraph);
+        const text = extractParagraphText(element.paragraph);
         
-        if (isSongTitle) {
+        if (text.includes('♭')) {
           if (currentSong) songs.push(currentSong);
-          currentSong = { title: text.trim(), author: '', fullText: text + '\n' };
+          const cleanTitle = text.replace('♭', '').trim();
+          currentSong = { title: cleanTitle, author: '', fullText: text + '\n' };
         } 
         else if (currentSong && !currentSong.author && 
                 (text.includes('Слова') || text.includes('Музыка') || 
@@ -107,13 +105,7 @@ async function getSongs() {
     
     if (currentSong) songs.push(currentSong);
     
-    return songs.filter(song => 
-      song.title && 
-      song.title.trim().length > 2 && 
-      !song.title.includes('Правила') &&
-      !song.title.match(/^\d+\.\s/) &&
-      song.title !== 'Ритмика'
-    );
+    return songs.filter(song => song.title && song.title.trim().length > 2);
   } catch (error) {
     console.error('Ошибка получения песен:', error.message);
     return [];
@@ -158,70 +150,39 @@ function extractParagraphText(paragraph) {
     }
   }
   
-  // Определяем, является ли параграф заголовком песни
-  const isSongTitle = paragraph.paragraphStyle && 
-                      paragraph.paragraphStyle.namedStyleType === 'TITLE' && 
-                      text.trim() && 
-                      !text.includes('Правила') && 
-                      !text.match(/^\d+\./) && 
-                      !text.includes('Припев') &&
-                      !text.includes('Будь осознанным') &&
-                      !text.includes('песенная служба');
-  
-  return { text, isSongTitle };
+  return text;
 }
 
 /**
- * Общая функция обработки команд поиска
+ * Обработка команды поиска
  */
-async function handleSearchCommand(msg, match, searchByText = false) {
+async function handleSearchCommand(msg, match) {
   const userId = msg.from.id;
   const chatId = msg.chat.id;
   const query = match && match[1] ? match[1].trim() : '';
   
   if (query) {
-    await performSearch(msg, query, searchByText ? 'text' : 'title');
+    await performSearch(msg, query);
   } else {
-    await bot.sendMessage(chatId, `Введите ${searchByText ? 'текст' : 'название'} песни:`);
-    userStates.set(userId, { waitingFor: searchByText ? 'text' : 'title' });
+    await bot.sendMessage(chatId, 'Введите название или текст песни:');
+    userStates.set(userId, { waitingFor: 'search' });
   }
   
-  updateStats(userId, searchByText ? '/text' : '/search');
-}
-
-/**
- * Расширенный поиск по названию, тексту, автору
- */
-async function handleAdvancedSearchCommand(msg, match) {
-  const userId = msg.from.id;
-  const chatId = msg.chat.id;
-  const query = match && match[1] ? match[1].trim() : '';
-  
-  if (query) {
-    await performSearch(msg, query, 'advanced');
-  } else {
-    await bot.sendMessage(chatId, 'Введите название, автора или текст песни:');
-    userStates.set(userId, { waitingFor: 'advanced' });
-  }
-  
-  updateStats(userId, '/serach');
+  updateStats(userId, '/search');
 }
 
 /**
  * Выполнение поиска песен
  */
-async function performSearch(msg, query, searchType) {
+async function performSearch(msg, query) {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   
   try {
-    const waitMessage = await bot.sendMessage(
-      chatId, 
-      `Ищу песню${searchType === 'text' ? ' по тексту' : ''}...`
-    );
+    const waitMessage = await bot.sendMessage(chatId, 'Ищу песню...');
     
     const songs = await getSongs();
-    const results = filterSongs(songs, query, searchType);
+    const results = filterSongs(songs, query);
     
     if (results.length === 0) {
       await bot.editMessageText('Ничего не найдено. Попробуйте изменить запрос.', {
@@ -269,22 +230,14 @@ async function performSearch(msg, query, searchType) {
 /**
  * Фильтрация песен по запросу
  */
-function filterSongs(songs, query, searchType) {
+function filterSongs(songs, query) {
   const normalizedQuery = query.toLowerCase().trim();
   
-  return songs.filter(song => {
-    if (searchType === 'title') {
-      return song.title.toLowerCase().includes(normalizedQuery);
-    } 
-    else if (searchType === 'text') {
-      return song.fullText.toLowerCase().includes(normalizedQuery);
-    }
-    else if (searchType === 'advanced') {
-      return song.title.toLowerCase().includes(normalizedQuery) || 
-             song.fullText.toLowerCase().includes(normalizedQuery) ||
-             (song.author && song.author.toLowerCase().includes(normalizedQuery));
-    }
-  });
+  return songs.filter(song => 
+    song.title.toLowerCase().includes(normalizedQuery) || 
+    song.fullText.toLowerCase().includes(normalizedQuery) ||
+    (song.author && song.author.toLowerCase().includes(normalizedQuery))
+  );
 }
 
 /**
@@ -329,7 +282,7 @@ function formatSongForDisplay(title, author, text) {
   
   // Пропускаем первые строки, которые повторяют название и автора
   let skipLines = 0;
-  if (lines.length > 0 && lines[0].trim() === title) {
+  if (lines.length > 0 && lines[0].trim().includes('♭')) {
     skipLines++;
     if (lines.length > 1 && author && lines[1].trim() === author) {
       skipLines++;
@@ -339,16 +292,6 @@ function formatSongForDisplay(title, author, text) {
   // Обрабатываем остальные строки
   for (let i = skipLines; i < lines.length; i++) {
     const line = lines[i];
-    
-    // Пропускаем метаданные
-    if ((i === skipLines || i === skipLines + 1) && 
-        (line.trim() === 'Ритмика' || 
-         line.includes('Перебор') || 
-         line.includes('Бой') ||
-         line.includes('Особенность') ||
-         line.includes('Группа'))) {
-      continue;
-    }
     
     // Добавляем обработанную строку к результату
     processedText += escapeHtml(line) + '\n';
@@ -435,19 +378,16 @@ async function sendLongMessage(chatId, text) {
  */
 
 /**
- * Обработка команды /start
+ * Обработка команды /start и /help
  */
 async function handleStartCommand(msg) {
   const userId = msg.from.id;
   const welcomeMessage = 
     'Привет! Я бот для поиска песен.\n\n' +
     'Доступные команды:\n' +
-    '/search - поиск по названию\n' +
-    '/text - поиск по тексту\n' +
+    '/search - поиск по названию или тексту\n' +
     '/list - список всех песен\n' +
     '/random - случайная песня\n' +
-    '/last - последняя просмотренная\n' +
-    '/serach - поиск по названию/тексту/автору\n' +
     '/help - справка';
   
   await bot.sendMessage(msg.chat.id, welcomeMessage);
@@ -455,22 +395,11 @@ async function handleStartCommand(msg) {
 }
 
 /**
- * Обработка команды /help
+ * Обработка команды /help (алиас для /start)
  */
 async function handleHelpCommand(msg) {
-  const userId = msg.from.id;
-  const helpMessage = 
-    'Список доступных команд:\n\n' +
-    '/search <название> - поиск песни по названию\n' +
-    '/text <текст> - поиск песни по тексту\n' +
-    '/list - список всех песен\n' +
-    '/random - случайная песня\n' +
-    '/last - последняя просмотренная песня\n' +
-    '/serach <запрос> - поиск песни по названию, тексту или автору\n' +
-    '/help - эта справка';
-  
-  await bot.sendMessage(msg.chat.id, helpMessage);
-  updateStats(userId, '/help');
+  handleStartCommand(msg);
+  updateStats(msg.from.id, '/help');
 }
 
 /**
@@ -499,12 +428,7 @@ async function handleListCommand(msg) {
     
     for (const song of songs) {
       // Пропускаем ненужные или пустые элементы
-      if (!song.title || 
-          song.title.trim().length < 3 || 
-          song.title === 'Ритмика' || 
-          song.title.includes('Припев') ||
-          song.title.includes('Правила') ||
-          song.title.match(/^\d+\.\s/)) {
+      if (!song.title || song.title.trim().length < 3) {
         continue;
       }
       
@@ -571,10 +495,7 @@ async function handleRandomCommand(msg) {
     
     // Фильтруем песни
     const validSongs = songs.filter(song => 
-      song.title && 
-      song.title.trim().length > 2 && 
-      !song.title.includes('Правила') &&
-      !song.title.match(/^\d+\.\s/)
+      song.title && song.title.trim().length > 2
     );
     
     if (validSongs.length === 0) {
@@ -600,42 +521,6 @@ async function handleRandomCommand(msg) {
 }
 
 /**
- * Обработка команды /last - последняя просмотренная песня
- */
-async function handleLastCommand(msg) {
-  const userId = msg.from.id;
-  const chatId = msg.chat.id;
-  const userState = userStates.get(userId);
-  
-  if (!userState || !userState.lastSongTitle) {
-    await bot.sendMessage(chatId, 'У вас еще нет последней просмотренной песни. Используйте команды /list, /random или /search.');
-    return;
-  }
-  
-  try {
-    // Ищем последнюю просмотренную песню
-    const songs = await getSongs();
-    
-    // Находим песню
-    const lastSong = songs.find(s => s.title === userState.lastSongTitle);
-    
-    if (!lastSong) {
-      await bot.sendMessage(chatId, 'Не удалось найти последнюю просмотренную песню.');
-      return;
-    }
-    
-    // Отправляем песню
-    await sendSong(chatId, lastSong.title, lastSong.author, lastSong.fullText);
-    
-    // Статистика
-    updateStats(userId, '/last');
-  } catch (error) {
-    console.error('Ошибка при получении последней песни:', error.message);
-    await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
-  }
-}
-
-/**
  * Обработка текстовых сообщений
  */
 async function handleTextMessage(msg) {
@@ -643,12 +528,11 @@ async function handleTextMessage(msg) {
   const text = msg.text.trim();
   const state = userStates.get(userId);
   
-  if (state && state.waitingFor) {
-    const searchType = state.waitingFor;
+  if (state && state.waitingFor === 'search') {
     userStates.set(userId, {});
-    await performSearch(msg, text, searchType);
+    await performSearch(msg, text);
   } else {
-    await performSearch(msg, text, 'title'); // По умолчанию ищем по названию
+    await performSearch(msg, text);
   }
 }
 
