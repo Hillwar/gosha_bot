@@ -248,6 +248,13 @@ async function sendSong(chatId, title, author, text) {
   try {
     const formattedText = formatSongForDisplay(title, author, text);
     await sendLongMessage(chatId, formattedText);
+    
+    // Отправляем ссылку на аккордник после песни
+    const songbookUrl = process.env.SONGBOOK_URL || 'https://docs.google.com/document/d/1UPg7HOeYbU-MxG_NlM-w5h-ReLpaaZSNg_cB_KUPaqM/edit';
+    await bot.sendMessage(chatId, `<a href="${songbookUrl}">Открыть аккордник</a>`, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    });
   } catch (error) {
     console.error('Ошибка отправки песни:', error.message);
     await bot.sendMessage(chatId, 'Произошла ошибка при отправке песни.');
