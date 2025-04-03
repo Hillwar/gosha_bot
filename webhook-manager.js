@@ -1,112 +1,112 @@
 /**
- * Скрипт для управления webhook Telegram бота
+ * Telegram Bot Webhook Manager
+ * Скрипт для управления webhook'ами Telegram бота
  */
 require('dotenv').config();
 const fetch = require('node-fetch');
 
-// Получаем токен бота из переменных окружения
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://gosha-bot.vercel.app/api/webhook';
 
-// Базовый URL для API Telegram
+if (!BOT_TOKEN) {
+  console.error('Ошибка: Переменная окружения BOT_TOKEN не установлена');
+  process.exit(1);
+}
+
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// Получаем аргументы командной строки
-const args = process.argv.slice(2);
-const command = args[0] || 'status';
-const webhookUrl = args[1];
-
-// Функция для получения информации о текущем webhook
-async function getWebhookInfo() {
-  try {
-    const response = await fetch(`${TELEGRAM_API}/getWebhookInfo`);
-    const data = await response.json();
-    
-    if (data.ok) {
-      console.log('Информация о вебхуке:');
-      console.log(JSON.stringify(data.result, null, 2));
-      
-      if (data.result.url) {
-        console.log('\nСтатус: Webhook установлен');
-        console.log(`URL: ${data.result.url}`);
-      } else {
-        console.log('\nСтатус: Webhook не установлен');
-      }
-    } else {
-      console.error('Ошибка при получении информации о вебхуке:', data.description);
-    }
-  } catch (error) {
-    console.error('Ошибка при запросе к Telegram API:', error);
-  }
-}
-
-// Функция для установки webhook
-async function setWebhook(url) {
-  if (!url) {
-    console.error('Ошибка: URL не указан');
-    console.log('Использование: node webhook-manager.js set https://ваш-домен.com/api/webhook');
-    return;
-  }
+// Функция выполнения запросов к API Telegram
+async function makeRequest(method, params = {}) {
+  const url = new URL(`${TELEGRAM_API}/${method}`);
+  
+  // Добавляем параметры в URL
+  Object.keys(params).forEach(key => {
+    url.searchParams.append(key, params[key]);
+  });
   
   try {
-    const response = await fetch(`${TELEGRAM_API}/setWebhook`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        url,
-        allowed_updates: ['message', 'callback_query']
-      }),
-    });
-    
+    const response = await fetch(url.toString());
     const data = await response.json();
-    
-    if (data.ok) {
-      console.log(`Webhook успешно установлен на ${url}`);
-    } else {
-      console.error('Ошибка при установке webhook:', data.description);
-    }
+    return data;
   } catch (error) {
-    console.error('Ошибка при запросе к Telegram API:', error);
+    console.error(`Ошибка при выполнении запроса ${method}:`, error);
+    throw error;
   }
 }
 
-// Функция для удаления webhook
-async function deleteWebhook() {
-  try {
-    const response = await fetch(`${TELEGRAM_API}/deleteWebhook`);
-    const data = await response.json();
-    
-    if (data.ok) {
-      console.log('Webhook успешно удален');
-    } else {
-      console.error('Ошибка при удалении webhook:', data.description);
-    }
-  } catch (error) {
-    console.error('Ошибка при запросе к Telegram API:', error);
+// Команды
+const commands = {
+  // Установка webhook
+  async setWebhook(url = WEBHOOK_URL) {
+    console.log(`Устанавливаем webhook на URL: ${url}`);
+    const result = await makeRequest('setWebhook', { url });
+    console.log('Результат установки webhook:', result);
+    return result;
+  },
+  
+  // Получение информации о webhook
+  async getWebhookInfo() {
+    console.log('Получаем информацию о webhook...');
+    const result = await makeRequest('getWebhookInfo');
+    console.log('Информация о webhook:', result);
+    return result;
+  },
+  
+  // Удаление webhook
+  async deleteWebhook() {
+    console.log('Удаляем webhook...');
+    const result = await makeRequest('deleteWebhook');
+    console.log('Результат удаления webhook:', result);
+    return result;
+  }
+};
+
+// Справка по использованию
+function showHelp() {
+  console.log(`
+Использование: node webhook-manager.js [команда]
+
+Доступные команды:
+  set [url]        - Установить webhook (по умолчанию: ${WEBHOOK_URL})
+  get              - Получить информацию о текущем webhook
+  delete           - Удалить webhook
+  help             - Показать эту справку
+  
+Примеры:
+  node webhook-manager.js set
+  node webhook-manager.js set https://example.com/webhook
+  node webhook-manager.js get
+  node webhook-manager.js delete
+  `);
+}
+
+// Обработка аргументов командной строки
+async function main() {
+  const args = process.argv.slice(2);
+  const command = args[0];
+  
+  if (!command || command === 'help') {
+    return showHelp();
+  }
+  
+  switch (command) {
+    case 'set':
+      await commands.setWebhook(args[1]);
+      break;
+    case 'get':
+      await commands.getWebhookInfo();
+      break;
+    case 'delete':
+      await commands.deleteWebhook();
+      break;
+    default:
+      console.error(`Неизвестная команда: ${command}`);
+      showHelp();
   }
 }
 
-// Отправка тестового сообщения для проверки работы бота
-async function testBot() {
-  // Здесь можно указать ID чата для отправки тестового сообщения
-  console.log('Для проверки работы бота отправьте сообщение боту в Telegram.');
-  console.log('Затем проверьте логи на сервере.');
-}
-
-// Запуск нужной функции в зависимости от команды
-switch (command) {
-  case 'set':
-    setWebhook(webhookUrl);
-    break;
-  case 'delete':
-    deleteWebhook();
-    break;
-  case 'test':
-    testBot();
-    break;
-  case 'status':
-  default:
-    getWebhookInfo();
-    break;
-}
+// Запуск скрипта
+main().catch(error => {
+  console.error('Произошла ошибка:', error);
+  process.exit(1);
+});
