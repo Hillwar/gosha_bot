@@ -331,11 +331,8 @@ async function getDocumentContent() {
 
     const docs = google.docs({ version: 'v1', auth });
     
-    // Запрашиваем документ
-    const response = await docs.documents.get({ 
-      documentId,
-      timeout: 30000 // 30 секунд таймаут
-    });
+    // Запрашиваем документ (удаляем параметр timeout, он не поддерживается API)
+    const response = await docs.documents.get({ documentId });
     
     return response.data;
   } catch (error) {
