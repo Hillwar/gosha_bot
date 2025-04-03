@@ -258,11 +258,16 @@ async function getDocumentContent() {
       ? process.env.SONGBOOK_URL.split('/d/')[1].split('/')[0]
       : process.env.SONGBOOK_URL;
     
+    // Подготавливаем private_key с учетом возможного отсутствия переменной
+    const privateKey = process.env.GOOGLE_PRIVATE_KEY 
+      ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
+      : undefined;
+    
     // Инициализация Google API с использованием переменных окружения
     const auth = new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        private_key: privateKey,
         client_id: process.env.GOOGLE_CLIENT_ID
       },
       scopes: ['https://www.googleapis.com/auth/documents.readonly']
@@ -279,6 +284,13 @@ async function getDocumentContent() {
     return response.data;
   } catch (error) {
     console.error('Ошибка при получении документа:', error);
+    // Добавляем детальную информацию об ошибке
+    console.error('Детали ошибки:', {
+      SONGBOOK_URL_exists: !!process.env.SONGBOOK_URL,
+      GOOGLE_CLIENT_EMAIL_exists: !!process.env.GOOGLE_CLIENT_EMAIL,
+      GOOGLE_PRIVATE_KEY_exists: !!process.env.GOOGLE_PRIVATE_KEY,
+      GOOGLE_CLIENT_ID_exists: !!process.env.GOOGLE_CLIENT_ID
+    });
     throw error;
   }
 }
