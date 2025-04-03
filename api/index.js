@@ -46,7 +46,8 @@ detailedLog('Переменные окружения:', {
   PORT: process.env.PORT,
   WEBHOOK_URL: process.env.WEBHOOK_URL,
   SONGBOOK_URL: process.env.SONGBOOK_URL,
-  BOT_NAME: process.env.BOT_NAME
+  BOT_NAME: process.env.BOT_NAME,
+  DISABLE_ANIMATIONS: process.env.DISABLE_ANIMATIONS
 });
 
 // Добавляем обработчик необработанных исключений
@@ -269,6 +270,7 @@ try {
     detailedLog('Запрос содержимого документа');
     try {
       const now = Date.now();
+      // Увеличиваем время кеширования для более быстрой работы
       if (docCache.content && docCache.lastUpdate && (now - docCache.lastUpdate < docCache.updateInterval)) {
         detailedLog('Возвращаем кешированный документ');
         return docCache.content;
@@ -279,15 +281,33 @@ try {
         : process.env.SONGBOOK_URL;
         
       detailedLog('Запрос к Google Docs API, documentId:', documentId);
-      const document = await docs.documents.get({ documentId });
+      
+      // Устанавливаем таймаут для запроса
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), 10000)
+      );
+      
+      // Выполняем запрос с таймаутом
+      const documentPromise = docs.documents.get({ documentId });
+      const document = await Promise.race([documentPromise, timeoutPromise]);
+      
       detailedLog('Документ успешно получен, размер:', 
                   document.data.body.content ? document.data.body.content.length : 'unknown');
       
       docCache.content = document.data;
       docCache.lastUpdate = now;
+      // Увеличиваем время кеширования до 15 минут
+      docCache.updateInterval = 15 * 60 * 1000;
       return document.data;
     } catch (error) {
       detailedLog('Ошибка получения документа:', error);
+      
+      // Если есть кешированная версия, используем её даже если устарела
+      if (docCache.content) {
+        detailedLog('Используем устаревший кеш из-за ошибки');
+        return docCache.content;
+      }
+      
       throw error;
     }
   }
@@ -303,9 +323,19 @@ try {
       let currentSong = null;
       let nextLineIsAuthor = false;
       
+      // Добавляем таймаут для обработки документа
+      const processStart = Date.now();
+      const maxProcessTime = 5000; // Максимальное время обработки документа - 5 секунд
+      
       detailedLog('Начинаем обработку элементов документа');
       
       for (const element of document.body.content) {
+        // Проверяем, не превысили ли мы время обработки
+        if (Date.now() - processStart > maxProcessTime) {
+          detailedLog('Превышено максимальное время обработки документа, прерываем');
+          break;
+        }
+        
         if (element.paragraph) {
           const text = extractParagraphText(element.paragraph);
           
@@ -403,52 +433,39 @@ try {
    * Отображение анимированного сообщения загрузки
    * @param {number} chatId - ID чата
    * @param {string} actionText - Текст действия (например, "Ищу песню")
-   * @param {number} [duration=5000] - Максимальная длительность анимации в мс
+   * @param {number} [duration=3000] - Максимальная длительность анимации в мс
    * @returns {Promise<Object>} - Объект сообщения для последующего редактирования/удаления
    */
-  async function showAnimatedLoading(chatId, actionText, duration = 5000) {
-    // Варианты анимации
-    const animationSets = {
-      // Прогресс-бар с эмодзи
-      progressBar: [
-        '🔍 ⬜⬜⬜⬜⬜ 0%',
-        '🔍 🟦⬜⬜⬜⬜ 20%',
-        '🔍 🟦🟦⬜⬜⬜ 40%',
-        '🔍 🟦🟦🟦⬜⬜ 60%',
-        '🔍 🟦🟦🟦🟦⬜ 80%',
-        '🔍 🟦🟦🟦🟦🟦 100%'
-      ],
-      
-      // Вращающийся спиннер
-      spinner: [
-        '🎵 ◐ Загрузка...',
-        '🎵 ◓ Загрузка...',
-        '🎵 ◑ Загрузка...',
-        '🎵 ◒ Загрузка...'
-      ],
-      
-      // Мигающие ноты
-      notes: [
-        '🎵 ♪ ♪ ♪',
-        '♪ 🎵 ♪ ♪',
-        '♪ ♪ 🎵 ♪',
-        '♪ ♪ ♪ 🎵'
-      ],
+  async function showAnimatedLoading(chatId, actionText, duration = 3000) {
+    // Проверяем, отключены ли анимации
+    if (process.env.DISABLE_ANIMATIONS === 'true') {
+      const message = await bot.sendMessage(chatId, `🔍 ${actionText}...`);
+      return {
+        message,
+        stop: () => {}
+      };
+    }
     
-      // Музыкальные инструменты
-      instruments: [
-        '🎸 Поиск...',
-        '🎹 Поиск...',
-        '🎤 Поиск...',
-        '🥁 Поиск...',
-        '🎻 Поиск...',
-        '🎺 Поиск...'
+    // Варианты анимации - упрощаю для скорости
+    const animationSets = {
+      // Простая анимация
+      simple: [
+        '🔍 Загрузка...',
+        '🔍 Загрузка..',
+        '🔍 Загрузка.'
+      ],
+      
+      // Короткий прогресс-бар
+      progressBar: [
+        '⬜⬜⬜',
+        '🟦⬜⬜',
+        '🟦🟦⬜',
+        '🟦🟦🟦'
       ]
     };
     
-    // Выбираем случайный набор анимации
-    const animationKeys = Object.keys(animationSets);
-    const selectedAnimation = animationSets[animationKeys[Math.floor(Math.random() * animationKeys.length)]];
+    // Выбираем анимацию
+    const selectedAnimation = animationSets.simple;
     
     // Отправляем начальное сообщение
     const message = await bot.sendMessage(
@@ -459,7 +476,7 @@ try {
     let currentFrame = 0;
     const startTime = Date.now();
     
-    // Запускаем интервал обновления
+    // Запускаем интервал обновления с меньшим временем
     const intervalId = setInterval(async () => {
       // Проверяем, не превысили ли мы максимальную длительность
       if (Date.now() - startTime >= duration) {
@@ -484,7 +501,12 @@ try {
         console.error('Ошибка обновления анимации:', error.message);
         clearInterval(intervalId);
       }
-    }, 400);
+    }, 200); // Уменьшаем интервал для более быстрой анимации
+    
+    // Устанавливаем таймаут для принудительной остановки анимации
+    setTimeout(() => {
+      clearInterval(intervalId);
+    }, duration + 500);
     
     // Возвращаем сообщение для дальнейшего взаимодействия
     return {
@@ -501,35 +523,7 @@ try {
    * @returns {Promise<void>}
    */
   async function showWelcomeAnimation(chatId) {
-    const welcomeFrames = [
-      '🎵 Привет! Я бот для поиска песен.',
-      '🎸 Привет! Я бот для поиска песен..',
-      '🎼 Привет! Я бот для поиска песен...',
-      '🎤 Привет! Я бот для поиска песен....',
-      '🎧 Привет! Я бот для поиска песен.....',
-      '🎹 Привет! Я бот для поиска песен......'
-    ];
-    
-    // Отправляем начальное сообщение
-    const message = await bot.sendMessage(chatId, welcomeFrames[0]);
-    
-    // Анимируем в течение нескольких секунд
-    for (let i = 1; i < welcomeFrames.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 300));
-      try {
-        await bot.editMessageText(welcomeFrames[i], {
-          chat_id: chatId,
-          message_id: message.message_id
-        });
-      } catch (error) {
-        console.error('Ошибка анимации приветствия:', error.message);
-        break;
-      }
-    }
-    
-    // Финальное сообщение после анимации
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
+    // Вместо анимации просто отправляем сообщение напрямую
     const commandsList = 
       'Доступные команды:\n' +
       '/search - поиск по названию или тексту\n' +
@@ -538,14 +532,7 @@ try {
       '/circlerules - правила круга\n' +
       '/help - справка';
     
-    try {
-      await bot.editMessageText('🎵 Привет! Я бот для поиска песен.\n\n' + commandsList, {
-        chat_id: chatId,
-        message_id: message.message_id
-      });
-    } catch (error) {
-      console.error('Ошибка обновления приветствия:', error.message);
-    }
+    await bot.sendMessage(chatId, '🎵 Привет! Я бот для поиска песен.\n\n' + commandsList);
   }
 
   /**
@@ -558,23 +545,44 @@ try {
     detailedLog('Выполнение поиска', { chatId, userId, query });
     
     try {
-      // Показываем анимированное сообщение загрузки
-      const loadingAnimation = await showAnimatedLoading(chatId, 'Ищу песню');
+      // Показываем анимированное сообщение загрузки или простое сообщение
+      let loadingMessage;
+      try {
+        const loadingAnimation = await showAnimatedLoading(chatId, 'Ищу песню');
+        loadingMessage = loadingAnimation.message;
+      } catch (error) {
+        // В случае ошибки с анимацией, отправляем простое сообщение
+        loadingMessage = await bot.sendMessage(chatId, '🔍 Ищу песню...');
+      }
       
-      detailedLog('Получаем список песен для поиска');
-      const songs = await getSongs();
-      detailedLog('Фильтруем песни по запросу:', query);
-      const results = filterSongs(songs, query);
-      detailedLog('Найдено результатов:', results.length);
+      // Устанавливаем таймаут для всего процесса поиска
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Поиск занял слишком много времени')), 15000)
+      );
       
-      // Останавливаем анимацию
-      loadingAnimation.stop();
+      // Обертка для поиска песен
+      const searchPromise = new Promise(async (resolve) => {
+        try {
+          detailedLog('Получаем список песен для поиска');
+          const songs = await getSongs();
+          detailedLog('Фильтруем песни по запросу:', query);
+          const results = filterSongs(songs, query);
+          detailedLog('Найдено результатов:', results.length);
+          resolve(results);
+        } catch (error) {
+          detailedLog('Ошибка в процессе поиска:', error);
+          reject(error);
+        }
+      });
+      
+      // Выполняем поиск с таймаутом
+      const results = await Promise.race([searchPromise, timeoutPromise]);
       
       if (results.length === 0) {
         detailedLog('Ничего не найдено по запросу');
         await bot.editMessageText('Ничего не найдено. Попробуйте изменить запрос.', {
           chat_id: chatId,
-          message_id: loadingAnimation.message.message_id
+          message_id: loadingMessage.message_id
         });
         return;
       }
@@ -583,7 +591,7 @@ try {
         detailedLog('Найдена одна песня, отправляем');
         const song = results[0];
         
-        await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
+        await bot.deleteMessage(chatId, loadingMessage.message_id);
         await sendSong(chatId, song.title, song.author, song.fullText);
         
         userStates.set(userId, { lastSongTitle: song.title });
@@ -591,7 +599,7 @@ try {
       }
       
       // Несколько результатов - показываем список
-      const maxResults = Math.min(results.length, 15);
+      const maxResults = Math.min(results.length, 10); // Уменьшаем до 10 результатов для скорости
       const songsToShow = results.slice(0, maxResults);
       
       detailedLog('Найдено несколько песен, отображаем список', { 
@@ -603,10 +611,10 @@ try {
         `Найдено ${results.length} песен${maxResults < results.length ? ' (показаны первые ' + maxResults + ')' : ''}. Выберите:`, 
         {
           chat_id: chatId,
-          message_id: loadingAnimation.message.message_id,
+          message_id: loadingMessage.message_id,
           reply_markup: {
             inline_keyboard: songsToShow.map((song, index) => [{
-              text: `${song.title}${song.author ? ' - ' + song.author.substring(0, 30) : ''}`,
+              text: `${song.title}${song.author ? ' - ' + song.author.substring(0, 20) : ''}`, // Уменьшаем длину
               callback_data: `song_${index}`
             }])
           }
@@ -616,7 +624,7 @@ try {
       userSongCache.set(userId, songsToShow);
     } catch (error) {
       detailedLog('Ошибка поиска:', error);
-      await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
+      await bot.sendMessage(chatId, 'Произошла ошибка или поиск занял слишком много времени. Попробуйте позже или другой запрос.');
     }
   }
 
@@ -885,16 +893,35 @@ try {
     const chatId = msg.chat.id;
     
     try {
-      // Сообщение о загрузке с анимацией
-      const loadingAnimation = await showAnimatedLoading(chatId, 'Загружаю список песен');
-      
-      // Получаем список песен
-      const songs = await getSongs();
-      
-      // Останавливаем анимацию и удаляем сообщение
-      loadingAnimation.stop();
+      // Сообщение о загрузке
+      let loadingMessage;
       try {
-        await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
+        const loadingAnimation = await showAnimatedLoading(chatId, 'Загружаю список песен', 3000);
+        loadingMessage = loadingAnimation.message;
+      } catch (error) {
+        loadingMessage = await bot.sendMessage(chatId, '🔍 Загружаю список песен...');
+      }
+      
+      // Устанавливаем таймаут
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Превышено время выполнения')), 10000)
+      );
+      
+      // Получаем песни с таймаутом
+      const getSongsPromise = new Promise(async (resolve) => {
+        try {
+          const songs = await getSongs();
+          resolve(songs);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      
+      const songs = await Promise.race([getSongsPromise, timeoutPromise]);
+      
+      // Удаляем сообщение о загрузке
+      try {
+        await bot.deleteMessage(chatId, loadingMessage.message_id);
       } catch (error) {
         console.error('Ошибка удаления сообщения:', error.message);
       }
@@ -945,7 +972,7 @@ try {
       updateStats(userId, '/list');
     } catch (error) {
       console.error('Ошибка получения списка песен:', error.message);
-      await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
+      await bot.sendMessage(chatId, 'Произошла ошибка или запрос занял слишком много времени. Попробуйте позже.');
     }
   }
 
@@ -957,16 +984,35 @@ try {
     const chatId = msg.chat.id;
     
     try {
-      // Сообщение о загрузке с анимацией
-      const loadingAnimation = await showAnimatedLoading(chatId, 'Выбираю случайную песню');
-      
-      // Получаем список песен
-      const songs = await getSongs();
-      
-      // Останавливаем анимацию и удаляем сообщение
-      loadingAnimation.stop();
+      // Сообщение о загрузке
+      let loadingMessage;
       try {
-        await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
+        const loadingAnimation = await showAnimatedLoading(chatId, 'Выбираю случайную песню', 3000);
+        loadingMessage = loadingAnimation.message;
+      } catch (error) {
+        loadingMessage = await bot.sendMessage(chatId, '🔍 Выбираю случайную песню...');
+      }
+      
+      // Устанавливаем таймаут
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Превышено время выполнения')), 10000)
+      );
+      
+      // Получаем песни с таймаутом
+      const getSongsPromise = new Promise(async (resolve) => {
+        try {
+          const songs = await getSongs();
+          resolve(songs);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      
+      const songs = await Promise.race([getSongsPromise, timeoutPromise]);
+      
+      // Удаляем сообщение о загрузке
+      try {
+        await bot.deleteMessage(chatId, loadingMessage.message_id);
       } catch (error) {
         console.error('Ошибка удаления сообщения:', error.message);
       }
@@ -994,7 +1040,7 @@ try {
       updateStats(userId, '/random');
     } catch (error) {
       console.error('Ошибка получения случайной песни:', error.message);
-      await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
+      await bot.sendMessage(chatId, 'Произошла ошибка или запрос занял слишком много времени. Попробуйте позже.');
     }
   }
 
@@ -1079,17 +1125,47 @@ try {
     const chatId = msg.chat.id;
     
     try {
-      // Сообщение о загрузке с анимацией
-      const loadingAnimation = await showAnimatedLoading(chatId, 'Загружаю правила круга');
+      // Сообщение о загрузке
+      let loadingMessage;
+      try {
+        const loadingAnimation = await showAnimatedLoading(chatId, 'Загружаю правила круга', 3000);
+        loadingMessage = loadingAnimation.message;
+      } catch (error) {
+        loadingMessage = await bot.sendMessage(chatId, '🔍 Загружаю правила круга...');
+      }
       
-      // Получаем документ
-      const document = await getDocumentContent();
+      // Устанавливаем таймаут
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Превышено время выполнения')), 10000)
+      );
+      
+      // Получаем документ с таймаутом
+      const getDocumentPromise = new Promise(async (resolve) => {
+        try {
+          const document = await getDocumentContent();
+          resolve(document);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      
+      const document = await Promise.race([getDocumentPromise, timeoutPromise]);
+      
       let rules = '';
       let foundRules = false;
       let isFirstLine = true;
       
-      // Ищем текст до первого символа ♭
+      // Ищем текст до первого символа ♭ с ограничением по времени
+      const startTime = Date.now();
+      const maxProcessTime = 3000; // Максимальное время обработки - 3 секунды
+      
       for (const element of document.body.content) {
+        // Проверяем, не превысили ли мы время обработки
+        if (Date.now() - startTime > maxProcessTime) {
+          detailedLog('Превышено максимальное время обработки правил, прерываем');
+          break;
+        }
+        
         if (element.paragraph) {
           const text = extractParagraphText(element.paragraph);
           
@@ -1112,10 +1188,9 @@ try {
         }
       }
       
-      // Останавливаем анимацию и удаляем сообщение
-      loadingAnimation.stop();
+      // Удаляем сообщение о загрузке
       try {
-        await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
+        await bot.deleteMessage(chatId, loadingMessage.message_id);
       } catch (error) {
         console.error('Ошибка удаления сообщения:', error.message);
       }
@@ -1133,7 +1208,7 @@ try {
       updateStats(userId, '/circlerules');
     } catch (error) {
       console.error('Ошибка получения правил круга:', error.message);
-      await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
+      await bot.sendMessage(chatId, 'Произошла ошибка или запрос занял слишком много времени. Попробуйте позже.');
     }
   }
 }
