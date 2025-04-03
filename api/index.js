@@ -15,6 +15,43 @@ const cache = {
   updateInterval: 30 * 60 * 1000 // 30 минут
 };
 
+// Добавляем набор анимированных сообщений о загрузке
+const loadingAnimations = [
+  "🔍 Ищу... ⏳",
+  "🔍 Ищу... ⌛",
+  "🔍 Ищу... ⏳",
+  "🔍 Ищу... ⌛"
+];
+
+// Вспомогательная функция для анимации загрузки
+async function animateLoading(ctx, initialMessage, animationTexts, duration = 5000) {
+  let currentIndex = 0;
+  const loadingMsg = await ctx.reply(initialMessage || animationTexts[0]);
+  
+  const intervalId = setInterval(async () => {
+    currentIndex = (currentIndex + 1) % animationTexts.length;
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id, 
+        loadingMsg.message_id, 
+        null, 
+        animationTexts[currentIndex]
+      );
+    } catch (e) {
+      // Игнорируем ошибки при обновлении сообщения
+    }
+  }, 500);
+  
+  // Возвращаем функцию для остановки анимации и ID сообщения
+  return {
+    stop: async () => {
+      clearInterval(intervalId);
+      return loadingMsg.message_id;
+    },
+    messageId: loadingMsg.message_id
+  };
+}
+
 // Команда /start
 bot.command('start', (ctx) => {
   ctx.reply('Привет! Я бот для поиска песен в аккорднике. Используй /help для списка команд.');
@@ -44,16 +81,30 @@ bot.command('search', async (ctx) => {
 
 // Команда /list
 bot.command('list', async (ctx) => {
-  const loadingMsg = await ctx.reply('Загружаю список песен...');
+  const animation = await animateLoading(
+    ctx, 
+    "🔍 Загружаю список песен... ⏳", 
+    ["🔍 Загружаю список песен... ⏳", "🔍 Загружаю список песен... ⌛", "🔍 Собираю песни... ⏳", "🔍 Собираю песни... ⌛"]
+  );
   
   try {
     const songs = await getSongs();
     if (!songs || songs.length === 0) {
-      return ctx.reply('Не удалось загрузить песни. Попробуйте позже.');
+      await ctx.telegram.editMessageText(
+        ctx.chat.id, 
+        animation.messageId, 
+        null, 
+        "❌ Не удалось загрузить песни. Попробуйте позже."
+      );
+      return;
     }
     
+    // Останавливаем анимацию и удаляем сообщение о загрузке
+    await animation.stop();
+    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
+    
     // Формируем и отправляем список песен
-    let message = 'Список песен в аккорднике:\n\n';
+    let message = 'Список песен в аккорднике 📖:\n\n';
     songs.forEach((song, index) => {
       message += `${index + 1}. ${song.title}\n`;
     });
@@ -70,33 +121,45 @@ bot.command('list', async (ctx) => {
     
   } catch (error) {
     console.error('Ошибка при получении списка песен:', error);
-    await ctx.reply('Произошла ошибка. Попробуйте позже.');
-  } finally {
-    // Удаляем сообщение о загрузке, если возможно
-    try {
-      await ctx.deleteMessage(loadingMsg.message_id);
-    } catch (e) {
-      // Игнорируем ошибку, если не можем удалить сообщение
-    }
+    await ctx.telegram.editMessageText(
+      ctx.chat.id, 
+      animation.messageId, 
+      null, 
+      "❌ Произошла ошибка. Попробуйте позже."
+    );
   }
 });
 
 // Команда /random
 bot.command('random', async (ctx) => {
-  const loadingMsg = await ctx.reply('Выбираю случайную песню...');
+  const animation = await animateLoading(
+    ctx, 
+    "🎲 Выбираю случайную песню... ⏳", 
+    ["🎲 Выбираю случайную песню... ⏳", "🎲 Выбираю случайную песню... ⌛", "🎲 Подбираю что-нибудь интересное... ⏳", "🎲 Подбираю что-нибудь интересное... ⌛"]
+  );
   
   try {
     const songs = await getSongs();
     if (!songs || songs.length === 0) {
-      return ctx.reply('Не удалось загрузить песни. Попробуйте позже.');
+      await ctx.telegram.editMessageText(
+        ctx.chat.id, 
+        animation.messageId, 
+        null, 
+        "❌ Не удалось загрузить песни. Попробуйте позже."
+      );
+      return;
     }
+    
+    // Останавливаем анимацию и удаляем сообщение о загрузке
+    await animation.stop();
+    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
     
     // Выбираем случайную песню
     const randomIndex = Math.floor(Math.random() * songs.length);
     const song = songs[randomIndex];
     
     // Отправляем песню
-    await ctx.reply(formatSongForDisplay(song));
+    await ctx.reply(`🎵 Случайная песня:\n\n${formatSongForDisplay(song)}`);
     
     // Отправляем ссылку на аккордник
     await ctx.reply(`<a href="${process.env.SONGBOOK_URL}">Открыть аккордник</a>`, { 
@@ -106,17 +169,22 @@ bot.command('random', async (ctx) => {
     
   } catch (error) {
     console.error('Ошибка при получении случайной песни:', error);
-    await ctx.reply('Произошла ошибка. Попробуйте позже.');
-  } finally {
-    try {
-      await ctx.deleteMessage(loadingMsg.message_id);
-    } catch (e) {}
+    await ctx.telegram.editMessageText(
+      ctx.chat.id, 
+      animation.messageId, 
+      null, 
+      "❌ Произошла ошибка. Попробуйте позже."
+    );
   }
 });
 
 // Команда /circlerules
 bot.command('circlerules', async (ctx) => {
-  const loadingMsg = await ctx.reply('Загружаю правила орлятского круга...');
+  const animation = await animateLoading(
+    ctx, 
+    "📜 Загружаю правила орлятского круга... ⏳", 
+    ["📜 Загружаю правила орлятского круга... ⏳", "📜 Загружаю правила орлятского круга... ⌛", "📜 Ищу правила... ⏳", "📜 Ищу правила... ⌛"]
+  );
   
   try {
     // Получаем документ
@@ -142,19 +210,25 @@ bot.command('circlerules', async (ctx) => {
       }
     }
     
+    // Останавливаем анимацию и удаляем сообщение о загрузке
+    await animation.stop();
+    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
+    
     if (!foundSongStart || rules.trim().length === 0) {
-      return ctx.reply('Не удалось найти правила орлятского круга в документе.');
+      await ctx.reply('❌ Не удалось найти правила орлятского круга в документе.');
+      return;
     }
     
-    await ctx.reply('Правила орлятского круга:\n\n' + rules.trim());
+    await ctx.reply('📜 Правила орлятского круга:\n\n' + rules.trim());
     
   } catch (error) {
     console.error('Ошибка при получении правил:', error);
-    await ctx.reply('Произошла ошибка. Попробуйте позже.');
-  } finally {
-    try {
-      await ctx.deleteMessage(loadingMsg.message_id);
-    } catch (e) {}
+    await ctx.telegram.editMessageText(
+      ctx.chat.id, 
+      animation.messageId, 
+      null, 
+      "❌ Произошла ошибка. Попробуйте позже."
+    );
   }
 });
 
@@ -166,12 +240,22 @@ bot.on('text', async (ctx) => {
 
 // Функция поиска песни
 async function performSearch(ctx, query) {
-  const loadingMsg = await ctx.reply(`Ищу песню "${query}"...`);
+  const animation = await animateLoading(
+    ctx, 
+    `🔍 Ищу песню "${query}"... ⏳`, 
+    [`🔍 Ищу песню "${query}"... ⏳`, `🔍 Ищу песню "${query}"... ⌛`, `🔍 Ищу совпадения... ⏳`, `🔍 Ищу совпадения... ⌛`]
+  );
   
   try {
     const songs = await getSongs();
     if (!songs || songs.length === 0) {
-      return ctx.reply('Не удалось загрузить песни. Попробуйте позже.');
+      await ctx.telegram.editMessageText(
+        ctx.chat.id, 
+        animation.messageId, 
+        null, 
+        "❌ Не удалось загрузить песни. Попробуйте позже."
+      );
+      return;
     }
     
     // Поиск по названию и автору
@@ -181,11 +265,15 @@ async function performSearch(ctx, query) {
       song.fullText.toLowerCase().includes(query.toLowerCase())
     );
     
+    // Останавливаем анимацию и удаляем сообщение о загрузке
+    await animation.stop();
+    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
+    
     if (matchedSongs.length === 0) {
-      return ctx.reply(`Песня "${query}" не найдена.`);
+      await ctx.reply(`❌ Песня "${query}" не найдена.`);
     } else if (matchedSongs.length === 1) {
       // Если нашли одну песню, отправляем её
-      await ctx.reply(formatSongForDisplay(matchedSongs[0]));
+      await ctx.reply(`🎵 Найдена песня:\n\n${formatSongForDisplay(matchedSongs[0])}`);
       
       // Отправляем ссылку на аккордник
       await ctx.reply(`<a href="${process.env.SONGBOOK_URL}">Открыть аккордник</a>`, { 
@@ -195,7 +283,7 @@ async function performSearch(ctx, query) {
       
     } else if (matchedSongs.length <= 10) {
       // Если нашли несколько песен, показываем список
-      let message = `Найдено ${matchedSongs.length} песен с "${query}":\n\n`;
+      let message = `🎵 Найдено ${matchedSongs.length} песен с "${query}":\n\n`;
       matchedSongs.forEach((song, index) => {
         message += `${index + 1}. ${song.title}${song.author ? ' - ' + song.author : ''}\n`;
       });
@@ -203,15 +291,16 @@ async function performSearch(ctx, query) {
       await ctx.reply(message);
     } else {
       // Если нашли слишком много, просим уточнить
-      await ctx.reply(`Найдено слишком много песен (${matchedSongs.length}). Пожалуйста, уточните запрос.`);
+      await ctx.reply(`⚠️ Найдено слишком много песен (${matchedSongs.length}). Пожалуйста, уточните запрос.`);
     }
   } catch (error) {
     console.error('Ошибка при поиске песни:', error);
-    await ctx.reply('Произошла ошибка при поиске песни. Попробуйте позже.');
-  } finally {
-    try {
-      await ctx.deleteMessage(loadingMsg.message_id);
-    } catch (e) {}
+    await ctx.telegram.editMessageText(
+      ctx.chat.id, 
+      animation.messageId, 
+      null, 
+      "❌ Произошла ошибка при поиске песни. Попробуйте позже."
+    );
   }
 }
 
@@ -355,12 +444,33 @@ function extractParagraphText(paragraph) {
     .join('');
 }
 
-// Запуск бота в режиме polling
-console.log('Запуск бота в режиме polling...');
-bot.launch()
-  .then(() => console.log('Бот успешно запущен!'))
-  .catch(err => console.error('Ошибка запуска бота:', err));
+// Обработка вебхуков для Vercel
+module.exports = async (req, res) => {
+  try {
+    // Если это GET запрос, отправляем статус
+    if (req.method === 'GET') {
+      return res.json({ status: 'OK', timestamp: new Date().toISOString() });
+    }
+    
+    // Если это не POST запрос, отклоняем
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+    
+    // Обрабатываем обновление от Telegram
+    await bot.handleUpdate(req.body);
+    
+    // Отправляем успешный статус
+    return res.status(200).send('OK');
+  } catch (error) {
+    console.error('Ошибка обработки запроса:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
 
-// Обработка остановки приложения
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Запуск бота в режиме polling для локальной разработки
+if (process.env.NODE_ENV !== 'production') {
+  bot.launch()
+    .then(() => console.log('Бот запущен в режиме polling'))
+    .catch(err => console.error('Ошибка запуска бота:', err));
+}
