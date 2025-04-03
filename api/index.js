@@ -42,7 +42,16 @@ const auth = new google.auth.GoogleAuth({
 const docs = google.docs({ version: 'v1', auth });
 
 // Инициализация Telegram Bot
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+let bot;
+if (process.env.NODE_ENV === 'production') {
+  // В продакшн используем webhook
+  bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+  console.log('Бот запущен в режиме webhook');
+} else {
+  // В разработке используем polling
+  bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+  console.log('Бот запущен в режиме polling');
+}
 
 // Регистрация обработчиков команд
 bot.onText(/\/start/, handleStartCommand);
@@ -62,6 +71,15 @@ bot.on('callback_query', handleCallbackQuery);
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`));
 
+// API эндпоинт для вебхука
+app.post('/api/webhook', (req, res) => {
+  if (req.body.message || req.body.callback_query) {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+  } else {
+    res.sendStatus(400);
+  }
+});
 
 /**
  * ОСНОВНЫЕ ФУНКЦИИ
