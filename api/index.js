@@ -440,43 +440,44 @@ try {
         
       detailedLog('Запрос к Google Docs API, documentId:', documentId);
       
-      // Устанавливаем таймаут для запроса
-      const timeoutPromise = new Promise((_, reject) => {
-        const timeoutId = setTimeout(() => {
-          clearTimeout(timeoutId);
-          reject(new Error('Timeout при получении документа'));
-        }, 20000); // Увеличиваем таймаут до 20 секунд
-      });
-      
-      // Выполняем запрос с таймаутом
-      const documentPromise = docs.documents.get({ documentId });
-      
-      // Используем Promise.race с правильной обработкой ошибок
-      const result = await Promise.race([
-        documentPromise.then(response => ({ success: true, data: response.data })),
-        timeoutPromise.then(() => ({ success: false, error: new Error('Timeout') }))
-      ]);
-      
-      // Обрабатываем результат
-      if (!result.success) {
-        throw result.error;
+      try {
+        // Простой метод: используем стандартный таймаут настроек библиотеки
+        const response = await docs.documents.get({ 
+          documentId,
+          timeout: 30000 // 30 секунд таймаут
+        });
+        
+        if (!response || !response.data) {
+          throw new Error('Нет данных в ответе API');
+        }
+        
+        const document = response.data;
+        detailedLog('Документ успешно получен, размер:', 
+                    document.body.content ? document.body.content.length : 'unknown');
+        
+        docCache.content = document;
+        docCache.lastUpdate = now;
+        // Увеличиваем время кеширования до 60 минут для большей стабильности
+        docCache.updateInterval = 60 * 60 * 1000;
+        return document;
+      } catch (apiError) {
+        detailedLog('Ошибка запроса к Google Docs API:', apiError);
+        
+        // Если есть кешированная версия, используем её даже если устарела
+        if (docCache.content) {
+          detailedLog('Используем устаревший кеш из-за ошибки API');
+          return docCache.content;
+        }
+        
+        // Если кеша нет и произошла ошибка API, возвращаем пустой документ
+        return { body: { content: [] } };
       }
-      
-      const document = result.data;
-      detailedLog('Документ успешно получен, размер:', 
-                  document.body.content ? document.body.content.length : 'unknown');
-      
-      docCache.content = document;
-      docCache.lastUpdate = now;
-      // Увеличиваем время кеширования до 30 минут
-      docCache.updateInterval = 30 * 60 * 1000;
-      return document;
     } catch (error) {
-      detailedLog('Ошибка получения документа:', error);
+      detailedLog('Критическая ошибка получения документа:', error);
       
       // Если есть кешированная версия, используем её даже если устарела
       if (docCache.content) {
-        detailedLog('Используем устаревший кеш из-за ошибки');
+        detailedLog('Используем устаревший кеш из-за критической ошибки');
         return docCache.content;
       }
       
@@ -541,13 +542,24 @@ try {
             else if (currentSong && nextLineIsAuthor) {
               // Эта строка - автор
               currentSong.author = text.trim();
-              currentSong.fullText = currentSong.fullText + "\n" + text;
+              // Добавляем строку автора
+              if (text.trim()) {
+                currentSong.fullText += "\n" + text;
+              }
               nextLineIsAuthor = false; // Сбрасываем флаг
               detailedLog('Найден автор песни:', currentSong.author);
             }
             else if (currentSong) {
-              // Добавляем строку к тексту песни
-              currentSong.fullText = currentSong.fullText + "\n" + text;
+              // Добавляем строку к тексту песни, только если она не пустая
+              if (text.trim()) {
+                currentSong.fullText += "\n" + text;
+              } else {
+                // Добавляем пустую строку, если в тексте нет уже подряд идущих пустых строк
+                const lastTwoChars = currentSong.fullText.slice(-2);
+                if (lastTwoChars !== "\n\n") {
+                  currentSong.fullText += "\n";
+                }
+              }
             }
           }
         }
