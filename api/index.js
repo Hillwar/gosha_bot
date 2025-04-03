@@ -35,15 +35,14 @@ const stats = {
 
 // Инициализация Google API
 const auth = new google.auth.GoogleAuth({
-  keyFile: path.join(__dirname, '..', 'Gosha IAM Admin.json'),
+  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ['https://www.googleapis.com/auth/documents.readonly']
 });
 
 const docs = google.docs({ version: 'v1', auth });
 
 // Инициализация Telegram Bot
-const isDev = process.env.NODE_ENV === 'development';
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: isDev });
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 // Регистрация обработчиков команд
 bot.onText(/\/start/, handleStartCommand);
@@ -63,12 +62,6 @@ bot.on('callback_query', handleCallbackQuery);
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`));
 
-// Настройка webhook если не в режиме разработки
-if (!isDev) {
-  setupWebhook();
-}
-
-console.log('Бот успешно запущен!');
 
 /**
  * ОСНОВНЫЕ ФУНКЦИИ
@@ -82,28 +75,35 @@ async function getSongs() {
     const document = await getDocumentContent();
     const songs = [];
     let currentSong = null;
+    let nextLineIsAuthor = false;
     
     for (const element of document.body.content) {
       if (element.paragraph) {
         const text = extractParagraphText(element.paragraph);
         
         if (text.includes('♭')) {
+          // Сохраняем предыдущую песню, если была
           if (currentSong) songs.push(currentSong);
+          
+          // Начинаем новую песню
           const cleanTitle = text.replace('♭', '').trim();
-          currentSong = { title: cleanTitle, author: '', fullText: text + '\n' };
+          currentSong = { title: cleanTitle, author: '', fullText: text };
+          nextLineIsAuthor = true; // Следующая строка будет автором
         } 
-        else if (currentSong && !currentSong.author && 
-                (text.includes('Слова') || text.includes('Музыка') || 
-                 text.includes('автор'))) {
+        else if (currentSong && nextLineIsAuthor) {
+          // Эта строка - автор
           currentSong.author = text.trim();
-          currentSong.fullText += text + '\n';
+          currentSong.fullText = currentSong.fullText + text;
+          nextLineIsAuthor = false; // Сбрасываем флаг
         }
         else if (currentSong) {
-          currentSong.fullText += text + '\n';
+          // Добавляем строку к тексту песни
+          currentSong.fullText = currentSong.fullText + text;
         }
       }
     }
     
+    // Сохраняем последнюю песню
     if (currentSong) songs.push(currentSong);
     
     return songs.filter(song => song.title && song.title.trim().length > 2);
@@ -173,6 +173,155 @@ async function handleSearchCommand(msg, match) {
 }
 
 /**
+ * Отображение анимированного сообщения загрузки
+ * @param {number} chatId - ID чата
+ * @param {string} actionText - Текст действия (например, "Ищу песню")
+ * @param {number} [duration=5000] - Максимальная длительность анимации в мс
+ * @returns {Promise<Object>} - Объект сообщения для последующего редактирования/удаления
+ */
+async function showAnimatedLoading(chatId, actionText, duration = 5000) {
+  // Варианты анимации
+  const animationSets = {
+    // Прогресс-бар с эмодзи
+    progressBar: [
+      '🔍 ⬜⬜⬜⬜⬜ 0%',
+      '🔍 🟦⬜⬜⬜⬜ 20%',
+      '🔍 🟦🟦⬜⬜⬜ 40%',
+      '🔍 🟦🟦🟦⬜⬜ 60%',
+      '🔍 🟦🟦🟦🟦⬜ 80%',
+      '🔍 🟦🟦🟦🟦🟦 100%'
+    ],
+    
+    // Вращающийся спиннер
+    spinner: [
+      '🎵 ◐ Загрузка...',
+      '🎵 ◓ Загрузка...',
+      '🎵 ◑ Загрузка...',
+      '🎵 ◒ Загрузка...'
+    ],
+    
+    // Мигающие ноты
+    notes: [
+      '🎵 ♪ ♪ ♪',
+      '♪ 🎵 ♪ ♪',
+      '♪ ♪ 🎵 ♪',
+      '♪ ♪ ♪ 🎵'
+    ],
+  
+    // Музыкальные инструменты
+    instruments: [
+      '🎸 Поиск...',
+      '🎹 Поиск...',
+      '🎤 Поиск...',
+      '🥁 Поиск...',
+      '🎻 Поиск...',
+      '🎺 Поиск...'
+    ]
+  };
+  
+  // Выбираем случайный набор анимации
+  const animationKeys = Object.keys(animationSets);
+  const selectedAnimation = animationSets[animationKeys[Math.floor(Math.random() * animationKeys.length)]];
+  
+  // Отправляем начальное сообщение
+  const message = await bot.sendMessage(
+    chatId, 
+    `${selectedAnimation[0]} ${actionText}...`
+  );
+  
+  let currentFrame = 0;
+  const startTime = Date.now();
+  
+  // Запускаем интервал обновления
+  const intervalId = setInterval(async () => {
+    // Проверяем, не превысили ли мы максимальную длительность
+    if (Date.now() - startTime >= duration) {
+      clearInterval(intervalId);
+      return;
+    }
+    
+    // Увеличиваем номер кадра
+    currentFrame = (currentFrame + 1) % selectedAnimation.length;
+    
+    try {
+      // Обновляем сообщение
+      await bot.editMessageText(
+        `${selectedAnimation[currentFrame]} ${actionText}...`,
+        {
+          chat_id: chatId,
+          message_id: message.message_id
+        }
+      );
+    } catch (error) {
+      // Игнорируем ошибки при редактировании сообщения
+      console.error('Ошибка обновления анимации:', error.message);
+      clearInterval(intervalId);
+    }
+  }, 400);
+  
+  // Возвращаем сообщение для дальнейшего взаимодействия
+  return {
+    message,
+    stop: () => {
+      clearInterval(intervalId);
+    }
+  };
+}
+
+/**
+ * Показывает приветственную анимацию
+ * @param {number} chatId - ID чата
+ * @returns {Promise<void>}
+ */
+async function showWelcomeAnimation(chatId) {
+  const welcomeFrames = [
+    '🎵 Привет! Я бот для поиска песен.',
+    '🎸 Привет! Я бот для поиска песен..',
+    '🎼 Привет! Я бот для поиска песен...',
+    '🎤 Привет! Я бот для поиска песен....',
+    '🎧 Привет! Я бот для поиска песен.....',
+    '🎹 Привет! Я бот для поиска песен......'
+  ];
+  
+  // Отправляем начальное сообщение
+  const message = await bot.sendMessage(chatId, welcomeFrames[0]);
+  
+  // Анимируем в течение нескольких секунд
+  for (let i = 1; i < welcomeFrames.length; i++) {
+    await new Promise(resolve => setTimeout(resolve, 300));
+    try {
+      await bot.editMessageText(welcomeFrames[i], {
+        chat_id: chatId,
+        message_id: message.message_id
+      });
+    } catch (error) {
+      console.error('Ошибка анимации приветствия:', error.message);
+      break;
+    }
+  }
+  
+  // Финальное сообщение после анимации
+  await new Promise(resolve => setTimeout(resolve, 500));
+  
+  const commandsList = 
+    'Доступные команды:\n' +
+    '/search - поиск по названию или тексту\n' +
+    '/list - список всех песен\n' +
+    '/random - случайная песня\n' +
+    '/circlerules - правила круга\n' +
+    '/help - справка';
+  
+  try {
+    await bot.editMessageText('🎵 Привет! Я бот для поиска песен.\n\n' + commandsList, {
+      chat_id: chatId,
+      message_id: message.message_id
+    });
+  } catch (error) {
+    console.error('Ошибка обновления приветствия:', error.message);
+  }
+}
+
+/**
  * Выполнение поиска песен
  */
 async function performSearch(msg, query) {
@@ -180,15 +329,19 @@ async function performSearch(msg, query) {
   const userId = msg.from.id;
   
   try {
-    const waitMessage = await bot.sendMessage(chatId, 'Ищу песню...');
+    // Показываем анимированное сообщение загрузки
+    const loadingAnimation = await showAnimatedLoading(chatId, 'Ищу песню');
     
     const songs = await getSongs();
     const results = filterSongs(songs, query);
     
+    // Останавливаем анимацию
+    loadingAnimation.stop();
+    
     if (results.length === 0) {
       await bot.editMessageText('Ничего не найдено. Попробуйте изменить запрос.', {
         chat_id: chatId,
-        message_id: waitMessage.message_id
+        message_id: loadingAnimation.message.message_id
       });
       return;
     }
@@ -196,7 +349,7 @@ async function performSearch(msg, query) {
     if (results.length === 1) {
       const song = results[0];
       
-      await bot.deleteMessage(chatId, waitMessage.message_id);
+      await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
       await sendSong(chatId, song.title, song.author, song.fullText);
       
       userStates.set(userId, { lastSongTitle: song.title });
@@ -211,7 +364,7 @@ async function performSearch(msg, query) {
       `Найдено ${results.length} песен${maxResults < results.length ? ' (показаны первые ' + maxResults + ')' : ''}. Выберите:`, 
       {
         chat_id: chatId,
-        message_id: waitMessage.message_id,
+        message_id: loadingAnimation.message.message_id,
         reply_markup: {
           inline_keyboard: songsToShow.map((song, index) => [{
             text: `${song.title}${song.author ? ' - ' + song.author.substring(0, 30) : ''}`,
@@ -274,41 +427,121 @@ function formatSongForDisplay(title, author, text) {
       .replace(/>/g, '&gt;');
   };
   
-  // Форматируем заголовок и автора
-  let result = `<b>${escapeHtml(title)}</b>\n`;
+  // Заголовок с красивым форматированием
+  let result = `🎵 <b>${escapeHtml(title)}</b>`;
   
+  // Добавляем автора, если есть
   if (author && author.trim()) {
-    result += `<i>${escapeHtml(author)}</i>\n\n`;
-  } else {
-    result += '\n';
+    result += `\n🎸 <i>${escapeHtml(author)}</i>`;
   }
   
-  // Обрабатываем текст песни
-  // Разбиваем на строки для анализа
+  // Разбиваем текст на строки
   const lines = text.split('\n');
-  let processedText = '';
   
-  // Пропускаем первые строки, которые повторяют название и автора
-  let skipLines = 0;
-  if (lines.length > 0 && lines[0].trim().includes('♭')) {
-    skipLines++;
-    if (lines.length > 1 && author && lines[1].trim() === author) {
-      skipLines++;
+  // Пропускаем первые строки (заголовок и автор)
+  let startIndex = 0;
+  if (lines.length > 0 && lines[0].includes('♭')) {
+    startIndex++;
+    // Вторая строка - автор
+    if (lines.length > 1) {
+      startIndex++;
     }
   }
   
-  // Обрабатываем остальные строки
-  for (let i = skipLines; i < lines.length; i++) {
+  // Ищем таблицу с метаданными (ритмика, особенности, группа)
+  let metadataFound = false;
+  let metadataLines = [];
+  
+  // Просматриваем строки после заголовка и автора для поиска метаданных
+  for (let i = startIndex; i < Math.min(startIndex + 10, lines.length); i++) {
     const line = lines[i].trim();
     
-    // Добавляем обработанную строку к результату
-    if (line) {
-      processedText += escapeHtml(line) + '\n';
+    // Ищем строки с метаданными
+    if (line.includes('Ритмика:') || line.includes('Особенность:') || line.includes('Группа:')) {
+      metadataLines.push(i);
+      metadataFound = true;
+    } else if (metadataFound && line === '') {
+      // Пустая строка после метаданных означает конец таблицы
+      break;
+    } else if (metadataFound) {
+      // Продолжение метаданных
+      metadataLines.push(i);
     }
   }
   
-  // Добавляем текст к результату
-  result += processedText;
+  // Если нашли метаданные, форматируем их красиво
+  if (metadataFound && metadataLines.length > 0) {
+    result += '\n\n<pre>┌─────────────────────────────┐';
+    
+    for (const lineIndex of metadataLines) {
+      const line = lines[lineIndex].trim();
+      
+      if (line) {
+        // Форматируем строки метаданных
+        if (line.includes(':')) {
+          const [key, value] = line.split(':').map(part => part.trim());
+          result += `\n│ <b>${escapeHtml(key)}</b>: ${escapeHtml(value || '-')}`;
+        } else {
+          result += `\n│ ${escapeHtml(line)}`;
+        }
+      }
+    }
+    
+    result += '\n└─────────────────────────────┘</pre>';
+    
+    // Обновляем начальный индекс для текста песни, пропуская метаданные
+    startIndex = Math.max(...metadataLines) + 1;
+    
+    // Пропускаем пустые строки после метаданных
+    while (startIndex < lines.length && lines[startIndex].trim() === '') {
+      startIndex++;
+    }
+  } else {
+    // Если метаданных нет, просто добавляем разделитель
+    result += '\n\n━━━━━━━━━━━━━━━━━━━━━━';
+  }
+  
+  // Добавляем основной текст песни
+  let inChordSection = false;
+  
+  for (let i = startIndex; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Пропускаем пустые строки в начале текста
+    if (i === startIndex && line.trim() === '') {
+      continue;
+    }
+    
+    // Проверяем, является ли строка аккордами
+    const isChordLine = /^[A-G][#b]?(m|maj|dim|aug|sus|add)?[0-9]?(\s+[A-G][#b]?(m|maj|dim|aug|sus|add)?[0-9]?)*$/.test(line.trim());
+    
+    if (isChordLine) {
+      // Форматируем аккорды моноширинным шрифтом
+      result += '\n<code>' + escapeHtml(line) + '</code>';
+      inChordSection = true;
+    } else if (line.trim() === '') {
+      // Пустые строки добавляем как есть
+      result += '\n' + escapeHtml(line);
+      inChordSection = false;
+    } else {
+      // Текст песни
+      if (inChordSection) {
+        // Текст под аккордами - обычный
+        result += '\n' + escapeHtml(line);
+      } else if (line.toLowerCase().trim().startsWith('припев') || 
+                line.toLowerCase().trim().startsWith('chorus')) {
+        // Выделяем припев
+        result += '\n<b>🔄 ' + escapeHtml(line) + '</b>';
+      } else if (/^\d+\./.test(line.trim())) {
+        // Выделяем куплеты (строки, начинающиеся с цифр и точки)
+        result += '\n<b>' + escapeHtml(line) + '</b>';
+      } else {
+        // Обычный текст
+        result += '\n' + escapeHtml(line);
+      }
+      inChordSection = false;
+    }
+  }
   
   return result;
 }
@@ -344,21 +577,18 @@ async function sendLongMessage(chatId, text) {
     // Заголовок и автор
     let headerText = titleLine;
     if (authorLine) {
-      headerText += '\n' + authorLine;
+      headerText = titleLine + '\n' + authorLine;
     }
-    currentPart = headerText + '\n\n';
+    currentPart = headerText;
     
     // Начальный индекс для контента
     let startIndex = headerText === titleLine ? 1 : 2;
-    if (startIndex < lines.length && lines[startIndex].trim() === '') {
-      startIndex++;
-    }
     
     // Собираем и отправляем части
     for (let i = startIndex; i < lines.length; i++) {
       const line = lines[i];
       
-      // Проверяем лимит
+      // Проверяем лимит с учетом следующей строки
       if (currentPart.length + line.length + 1 > maxLength) {
         if (currentPart.trim()) {
           await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
@@ -366,11 +596,14 @@ async function sendLongMessage(chatId, text) {
         
         // Новая часть с заголовком
         const cleanTitleText = titleLine.replace(/<b>|<\/b>/g, '').trim();
-        currentPart = `<b>[Продолжение]</b> ${cleanTitleText}\n\n`;
+        currentPart = `<b>[Продолжение]</b> ${cleanTitleText}`;
       }
       
       // Добавляем строку
-      currentPart += line + '\n';
+      if (currentPart.length > 0) {
+        currentPart += '\n';
+      }
+      currentPart += line;
     }
     
     // Отправляем последнюю часть
@@ -392,16 +625,8 @@ async function sendLongMessage(chatId, text) {
  */
 async function handleStartCommand(msg) {
   const userId = msg.from.id;
-  const welcomeMessage = 
-    'Привет! Я бот для поиска песен.\n\n' +
-    'Доступные команды:\n' +
-    '/search - поиск по названию или тексту\n' +
-    '/list - список всех песен\n' +
-    '/random - случайная песня\n' +
-    '/circlerules - правила круга\n' +
-    '/help - справка';
   
-  await bot.sendMessage(msg.chat.id, welcomeMessage);
+  await showWelcomeAnimation(msg.chat.id);
   updateStats(userId, '/start');
 }
 
@@ -421,15 +646,16 @@ async function handleListCommand(msg) {
   const chatId = msg.chat.id;
   
   try {
-    // Сообщение о загрузке
-    const waitMessage = await bot.sendMessage(chatId, 'Загрузка списка песен...');
+    // Сообщение о загрузке с анимацией
+    const loadingAnimation = await showAnimatedLoading(chatId, 'Загружаю список песен');
     
     // Получаем список песен
     const songs = await getSongs();
     
-    // Удаляем сообщение загрузки
+    // Останавливаем анимацию и удаляем сообщение
+    loadingAnimation.stop();
     try {
-      await bot.deleteMessage(chatId, waitMessage.message_id);
+      await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
     } catch (error) {
       console.error('Ошибка удаления сообщения:', error.message);
     }
@@ -455,19 +681,19 @@ async function handleListCommand(msg) {
     filteredSongs.sort((a, b) => a.title.localeCompare(b.title, 'ru'));
     
     // Формируем сообщение
-    let message = `Список песен в аккорднике (${filteredSongs.length}):\n\n`;
+    let message = `Список песен в аккорднике (${filteredSongs.length}):`;
     
     for (let i = 0; i < filteredSongs.length; i++) {
       const songNumber = i + 1;
       const song = filteredSongs[i];
       
-      // Выводим только название песни
-      message += `${songNumber}. ${song.title}\n`;
+      // Добавляем перенос строки перед каждой песней
+      message += '\n' + `${songNumber}. ${song.title}`;
       
       // Разбиваем на части при необходимости
       if (message.length > MAX_MESSAGE_LENGTH - 200 && i < filteredSongs.length - 1) {
         await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
-        message = `Продолжение списка песен:\n\n`;
+        message = 'Продолжение списка песен:';
       }
     }
     
@@ -492,14 +718,16 @@ async function handleRandomCommand(msg) {
   const chatId = msg.chat.id;
   
   try {
-    const waitMessage = await bot.sendMessage(chatId, 'Выбираю случайную песню...');
+    // Сообщение о загрузке с анимацией
+    const loadingAnimation = await showAnimatedLoading(chatId, 'Выбираю случайную песню');
     
     // Получаем список песен
     const songs = await getSongs();
     
-    // Удаляем сообщение загрузки
+    // Останавливаем анимацию и удаляем сообщение
+    loadingAnimation.stop();
     try {
-      await bot.deleteMessage(chatId, waitMessage.message_id);
+      await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
     } catch (error) {
       console.error('Ошибка удаления сообщения:', error.message);
     }
@@ -597,19 +825,6 @@ async function handleCallbackQuery(callback) {
 }
 
 /**
- * Настройка вебхука
- */
-async function setupWebhook() {
-  try {
-    const webhookUrl = process.env.WEBHOOK_URL || `https://${process.env.HOST}/bot${process.env.BOT_TOKEN}`;
-    await bot.setWebHook(webhookUrl);
-    console.log(`Webhook установлен на ${webhookUrl}`);
-  } catch (error) {
-    console.error('Ошибка установки webhook:', error.message);
-  }
-}
-
-/**
  * Обновление статистики
  */
 function updateStats(userId, command) {
@@ -625,13 +840,14 @@ async function handleCircleRulesCommand(msg) {
   const chatId = msg.chat.id;
   
   try {
-    // Сообщение о загрузке
-    const waitMessage = await bot.sendMessage(chatId, 'Загружаю правила круга...');
+    // Сообщение о загрузке с анимацией
+    const loadingAnimation = await showAnimatedLoading(chatId, 'Загружаю правила круга');
     
     // Получаем документ
     const document = await getDocumentContent();
     let rules = '';
     let foundRules = false;
+    let isFirstLine = true;
     
     // Ищем текст до первого символа ♭
     for (const element of document.body.content) {
@@ -647,14 +863,20 @@ async function handleCircleRulesCommand(msg) {
         // Добавляем текст к правилам если он не пустой
         const trimmedText = text.trim();
         if (trimmedText) {
-          rules += trimmedText + '\n';
+          if (isFirstLine) {
+            rules += trimmedText;
+            isFirstLine = false;
+          } else {
+            rules += '\n' + trimmedText;
+          }
         }
       }
     }
     
-    // Удаляем сообщение загрузки
+    // Останавливаем анимацию и удаляем сообщение
+    loadingAnimation.stop();
     try {
-      await bot.deleteMessage(chatId, waitMessage.message_id);
+      await bot.deleteMessage(chatId, loadingAnimation.message.message_id);
     } catch (error) {
       console.error('Ошибка удаления сообщения:', error.message);
     }
@@ -665,15 +887,7 @@ async function handleCircleRulesCommand(msg) {
     }
     
     // Форматируем и отправляем правила
-    const escapeHtml = (unsafe) => {
-      if (!unsafe) return '';
-      return unsafe
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-    };
-    
-    const formattedRules = '<b>Правила круга</b>\n\n' + escapeHtml(rules.trim());
+    const formattedRules = '<b>Правила круга</b>\n\n' + rules;
     await sendLongMessage(chatId, formattedRules);
     
     // Статистика
