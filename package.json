@@ -5,8 +5,8 @@
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
-    "dev": "cross-env NODE_ENV=development nodemon api/index.js",
-    "dev-win": "$env:NODE_ENV='development'; nodemon api/index.js",
+    "dev": "nodemon api/index.js",
+    "dev-win": "nodemon api/index.js",
     "logs": "type combined.log",
     "webhook": "node webhook-manager.js",
     "convert-account": "node convert-service-account.js"
