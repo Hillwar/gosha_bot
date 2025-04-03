@@ -258,20 +258,44 @@ async function getDocumentContent() {
       ? process.env.SONGBOOK_URL.split('/d/')[1].split('/')[0]
       : process.env.SONGBOOK_URL;
     
+    // Проверяем наличие всех необходимых переменных окружения
+    const hasAllCredentials = 
+      process.env.GOOGLE_CLIENT_EMAIL && 
+      process.env.GOOGLE_PRIVATE_KEY && 
+      process.env.GOOGLE_CLIENT_ID;
+    
     // Подготавливаем private_key с учетом возможного отсутствия переменной
     const privateKey = process.env.GOOGLE_PRIVATE_KEY 
       ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
       : undefined;
     
-    // Инициализация Google API с использованием переменных окружения
-    const auth = new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: privateKey,
-        client_id: process.env.GOOGLE_CLIENT_ID
-      },
-      scopes: ['https://www.googleapis.com/auth/documents.readonly']
-    });
+    let auth;
+    
+    // Инициализация Google API в зависимости от наличия переменных окружения
+    if (hasAllCredentials) {
+      console.log('Используем JWT аутентификацию с переменными окружения');
+      auth = new google.auth.GoogleAuth({
+        credentials: {
+          type: 'service_account',
+          project_id: process.env.GOOGLE_PROJECT_ID || 'default-project',
+          private_key_id: process.env.GOOGLE_PRIVATE_KEY_ID || 'default-key-id',
+          private_key: privateKey,
+          client_email: process.env.GOOGLE_CLIENT_EMAIL,
+          client_id: process.env.GOOGLE_CLIENT_ID,
+          auth_uri: "https://accounts.google.com/o/oauth2/auth",
+          token_uri: "https://oauth2.googleapis.com/token",
+          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+          client_x509_cert_url: process.env.GOOGLE_CLIENT_CERT_URL || "https://www.googleapis.com/robot/v1/metadata/x509/default.gserviceaccount.com"
+        },
+        scopes: ['https://www.googleapis.com/auth/documents.readonly']
+      });
+    } else {
+      console.log('Используем стандартную аутентификацию Application Default Credentials');
+      // Пробуем использовать Application Default Credentials
+      auth = new google.auth.GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/documents.readonly']
+      });
+    }
 
     const docs = google.docs({ version: 'v1', auth });
     
@@ -291,6 +315,22 @@ async function getDocumentContent() {
       GOOGLE_PRIVATE_KEY_exists: !!process.env.GOOGLE_PRIVATE_KEY,
       GOOGLE_CLIENT_ID_exists: !!process.env.GOOGLE_CLIENT_ID
     });
+    
+    if (error.message && error.message.includes('client_email')) {
+      console.error('Ошибка связана с отсутствием client_email в объекте credentials');
+      
+      // Вывод значений переменных окружения для отладки (только первые 5 символов для безопасности)
+      if (process.env.GOOGLE_CLIENT_EMAIL) {
+        console.log('GOOGLE_CLIENT_EMAIL начинается с:', process.env.GOOGLE_CLIENT_EMAIL.substring(0, 5) + '...');
+      }
+      if (process.env.GOOGLE_PRIVATE_KEY) {
+        console.log('GOOGLE_PRIVATE_KEY начинается с:', process.env.GOOGLE_PRIVATE_KEY.substring(0, 5) + '...');
+      }
+      if (process.env.GOOGLE_CLIENT_ID) {
+        console.log('GOOGLE_CLIENT_ID начинается с:', process.env.GOOGLE_CLIENT_ID.substring(0, 5) + '...');
+      }
+    }
+    
     throw error;
   }
 }
