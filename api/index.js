@@ -355,33 +355,12 @@ function extractParagraphText(paragraph) {
     .join('');
 }
 
-// Обработка вебхуков для Vercel
-module.exports = async (req, res) => {
-  try {
-    // Если это GET запрос, отправляем статус
-    if (req.method === 'GET') {
-      return res.json({ status: 'OK', timestamp: new Date().toISOString() });
-    }
-    
-    // Если это не POST запрос, отклоняем
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method not allowed' });
-    }
-    
-    // Обрабатываем обновление от Telegram
-    await bot.handleUpdate(req.body);
-    
-    // Отправляем успешный статус
-    return res.status(200).send('OK');
-  } catch (error) {
-    console.error('Ошибка обработки запроса:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
+// Запуск бота в режиме polling
+console.log('Запуск бота в режиме polling...');
+bot.launch()
+  .then(() => console.log('Бот успешно запущен!'))
+  .catch(err => console.error('Ошибка запуска бота:', err));
 
-// Запуск бота в режиме polling для локальной разработки
-if (process.env.NODE_ENV !== 'production') {
-  bot.launch()
-    .then(() => console.log('Бот запущен в режиме polling'))
-    .catch(err => console.error('Ошибка запуска бота:', err));
-}
+// Обработка остановки приложения
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
