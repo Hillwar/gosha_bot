@@ -1,77 +1,50 @@
+/**
+ * Gosha Bot - Telegram бот для песен с аккордами
+ */
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const { google } = require('googleapis');
-const fs = require('fs');
 
-// Настройка бота
+// Инициализация бота Telegram
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// Кэш для документа и песен
+// Кэш документа и песен для оптимизации
 const cache = {
   songs: [],
   lastUpdate: null,
-  updateInterval: 60 * 60 * 1000, // 1 час
+  updateInterval: 30 * 60 * 1000 // 30 минут
 };
 
-// Основные функции бота
-bot.start((ctx) => {
+// Команда /start
+bot.command('start', (ctx) => {
   ctx.reply('Привет! Я бот для поиска песен в аккорднике. Используй /help для списка команд.');
 });
 
-bot.help((ctx) => {
+// Команда /help
+bot.command('help', (ctx) => {
   ctx.reply(
     'Доступные команды:\n' +
     '/start - Приветствие и запуск бота\n' +
     '/help - Показать список доступных команд\n' +
-    '/search - Поиск песни в аккорднике (просто напиши название)\n' +
+    '/search - Поиск песни в аккорднике\n' +
     '/list - Список всех песен\n' +
     '/circlerules - Правила орлятского круга\n' +
     '/random - Случайная песня'
   );
 });
 
-// Команда поиска песни - работает как с командой, так и с обычным текстом
+// Команда /search
 bot.command('search', async (ctx) => {
   const query = ctx.message.text.replace('/search', '').trim();
   if (!query) {
-    return ctx.reply('Напиши название песни для поиска. Например: /search Группа крови');
+    return ctx.reply('Напиши название песни для поиска. Например: /search Перемен');
   }
   await performSearch(ctx, query);
 });
 
-// Команда списка песен
+// Команда /list
 bot.command('list', async (ctx) => {
-  const loadingMessage = await ctx.reply('Загружаю список песен...');
-  
-  try {
-    const songs = await getSongs();
-    if (!songs || songs.length === 0) {
-      return ctx.reply('Не удалось загрузить список песен. Попробуйте позже.');
-    }
-    
-    let message = 'Список песен в аккорднике:\n\n';
-    songs.forEach((song, index) => {
-      message += `${index + 1}. ${song.title}\n`;
-    });
-    
-    // Если сообщение слишком длинное, разделяем на части
-    if (message.length > 4000) {
-      const chunks = message.match(/.{1,4000}/gs);
-      for (let i = 0; i < chunks.length; i++) {
-        await ctx.reply(chunks[i]);
-      }
-    } else {
-      await ctx.reply(message);
-    }
-  } catch (error) {
-    console.error('Ошибка при получении списка песен:', error);
-    await ctx.reply('Произошла ошибка при загрузке списка песен. Попробуйте позже.');
-  }
-});
-
-// Команда случайной песни
-bot.command('random', async (ctx) => {
-  const loadingMessage = await ctx.reply('Выбираю случайную песню...');
+  const loadingMsg = await ctx.reply('Загружаю список песен...');
   
   try {
     const songs = await getSongs();
@@ -79,44 +52,113 @@ bot.command('random', async (ctx) => {
       return ctx.reply('Не удалось загрузить песни. Попробуйте позже.');
     }
     
+    // Формируем и отправляем список песен
+    let message = 'Список песен в аккорднике:\n\n';
+    songs.forEach((song, index) => {
+      message += `${index + 1}. ${song.title}\n`;
+    });
+    
+    // Разбиваем сообщение, если оно слишком длинное
+    if (message.length > 4000) {
+      const chunks = message.match(/.{1,4000}/gs);
+      for (const chunk of chunks) {
+        await ctx.reply(chunk);
+      }
+    } else {
+      await ctx.reply(message);
+    }
+    
+  } catch (error) {
+    console.error('Ошибка при получении списка песен:', error);
+    await ctx.reply('Произошла ошибка. Попробуйте позже.');
+  } finally {
+    // Удаляем сообщение о загрузке, если возможно
+    try {
+      await ctx.deleteMessage(loadingMsg.message_id);
+    } catch (e) {
+      // Игнорируем ошибку, если не можем удалить сообщение
+    }
+  }
+});
+
+// Команда /random
+bot.command('random', async (ctx) => {
+  const loadingMsg = await ctx.reply('Выбираю случайную песню...');
+  
+  try {
+    const songs = await getSongs();
+    if (!songs || songs.length === 0) {
+      return ctx.reply('Не удалось загрузить песни. Попробуйте позже.');
+    }
+    
+    // Выбираем случайную песню
     const randomIndex = Math.floor(Math.random() * songs.length);
     const song = songs[randomIndex];
     
+    // Отправляем песню
     await ctx.reply(formatSongForDisplay(song));
+    
+    // Отправляем ссылку на аккордник
+    await ctx.reply(`<a href="${process.env.SONGBOOK_URL}">Открыть аккордник</a>`, { 
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    });
+    
   } catch (error) {
     console.error('Ошибка при получении случайной песни:', error);
-    await ctx.reply('Произошла ошибка при загрузке песни. Попробуйте позже.');
+    await ctx.reply('Произошла ошибка. Попробуйте позже.');
+  } finally {
+    try {
+      await ctx.deleteMessage(loadingMsg.message_id);
+    } catch (e) {}
   }
 });
 
-// Команда правил орлятского круга
+// Команда /circlerules
 bot.command('circlerules', async (ctx) => {
-  const loadingMessage = await ctx.reply('Загружаю правила орлятского круга...');
+  const loadingMsg = await ctx.reply('Загружаю правила орлятского круга...');
   
   try {
-    const rules = [
-      "1. В кругу все равны",
-      "2. Дослушай человека, не перебивай его",
-      "3. Говори от своего имени, не навязывай своего мнения другим",
-      "4. Уважай мнение других",
-      "5. Будь искренен",
-      "6. Обсуждается всё, что происходит в кругу",
-      "7. Постарайся понять точку зрения других",
-      "8. Не выноси за пределы круга то, что происходит в нём",
-      "9. Проси слово, подняв правую руку",
-      "10. Говори коротко, понятно, по существу",
-      "11. Критикуя, предлагай",
-      "12. Не давай оценок людям"
-    ];
+    // Получаем документ
+    const document = await getDocumentContent();
+    let rules = '';
+    let foundSongStart = false;
     
-    await ctx.reply('Правила орлятского круга:\n\n' + rules.join('\n'));
+    // Ищем текст до первого символа ♭
+    for (const element of document.body.content) {
+      if (element.paragraph) {
+        const text = extractParagraphText(element.paragraph);
+        
+        if (text.includes('♭')) {
+          // Достигли первой песни
+          foundSongStart = true;
+          break;
+        }
+        
+        // Добавляем текст к правилам
+        if (text.trim()) {
+          rules += text.trim() + '\n';
+        }
+      }
+    }
+    
+    if (!foundSongStart || rules.trim().length === 0) {
+      return ctx.reply('Не удалось найти правила орлятского круга в документе.');
+    }
+    
+    await ctx.reply('Правила орлятского круга:\n\n' + rules.trim());
+    
   } catch (error) {
-    console.error('Ошибка при получении правил орлятского круга:', error);
-    await ctx.reply('Произошла ошибка при загрузке правил. Попробуйте позже.');
+    console.error('Ошибка при получении правил:', error);
+    await ctx.reply('Произошла ошибка. Попробуйте позже.');
+  } finally {
+    try {
+      await ctx.deleteMessage(loadingMsg.message_id);
+    } catch (e) {}
   }
 });
 
-// Обработка текстового сообщения как поиска
+// Обработка текстовых сообщений (поиск без команды)
 bot.on('text', async (ctx) => {
   if (ctx.message.text.startsWith('/')) return; // Пропускаем команды
   await performSearch(ctx, ctx.message.text);
@@ -124,7 +166,7 @@ bot.on('text', async (ctx) => {
 
 // Функция поиска песни
 async function performSearch(ctx, query) {
-  const loadingMessage = await ctx.reply(`Ищу песню "${query}"...`);
+  const loadingMsg = await ctx.reply(`Ищу песню "${query}"...`);
   
   try {
     const songs = await getSongs();
@@ -132,21 +174,30 @@ async function performSearch(ctx, query) {
       return ctx.reply('Не удалось загрузить песни. Попробуйте позже.');
     }
     
-    // Поиск по названию
+    // Поиск по названию и автору
     const matchedSongs = songs.filter(song => 
       song.title.toLowerCase().includes(query.toLowerCase()) ||
-      (song.author && song.author.toLowerCase().includes(query.toLowerCase()))
+      (song.author && song.author.toLowerCase().includes(query.toLowerCase())) ||
+      song.fullText.toLowerCase().includes(query.toLowerCase())
     );
     
     if (matchedSongs.length === 0) {
       return ctx.reply(`Песня "${query}" не найдена.`);
     } else if (matchedSongs.length === 1) {
+      // Если нашли одну песню, отправляем её
       await ctx.reply(formatSongForDisplay(matchedSongs[0]));
+      
+      // Отправляем ссылку на аккордник
+      await ctx.reply(`<a href="${process.env.SONGBOOK_URL}">Открыть аккордник</a>`, { 
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      });
+      
     } else if (matchedSongs.length <= 10) {
-      // Если нашли несколько песен, показываем список с номерами
+      // Если нашли несколько песен, показываем список
       let message = `Найдено ${matchedSongs.length} песен с "${query}":\n\n`;
       matchedSongs.forEach((song, index) => {
-        message += `${index + 1}. ${song.title}\n`;
+        message += `${index + 1}. ${song.title}${song.author ? ' - ' + song.author : ''}\n`;
       });
       message += '\nУкажите номер песни или уточните поиск.';
       await ctx.reply(message);
@@ -157,12 +208,34 @@ async function performSearch(ctx, query) {
   } catch (error) {
     console.error('Ошибка при поиске песни:', error);
     await ctx.reply('Произошла ошибка при поиске песни. Попробуйте позже.');
+  } finally {
+    try {
+      await ctx.deleteMessage(loadingMsg.message_id);
+    } catch (e) {}
   }
 }
 
 // Форматирование песни для отображения
 function formatSongForDisplay(song) {
-  return song.fullText;
+  let formattedText = `${song.title}\n`;
+  if (song.author) {
+    formattedText += `${song.author}\n\n`;
+  } else {
+    formattedText += '\n';
+  }
+  
+  // Добавляем текст песни
+  const lines = song.fullText.split('\n');
+  let skipLines = 2; // Пропускаем заголовок и автора
+  
+  for (let i = skipLines; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line) {
+      formattedText += line + '\n';
+    }
+  }
+  
+  return formattedText;
 }
 
 // Получение и обработка песен из Google Docs
@@ -204,23 +277,12 @@ async function getSongs() {
         else if (currentSong && nextLineIsAuthor) {
           // Эта строка - автор
           currentSong.author = text.trim();
-          // Добавляем строку автора
-          if (text.trim()) {
-            currentSong.fullText += '\n' + text;
-          }
+          currentSong.fullText += '\n' + text;
           nextLineIsAuthor = false;
         }
         else if (currentSong) {
-          // Добавляем строку к тексту песни, только если она не пустая
-          if (text.trim()) {
-            currentSong.fullText += '\n' + text;
-          } else {
-            // Добавляем пустую строку, если в тексте нет уже подряд идущих пустых строк
-            const lastTwoChars = currentSong.fullText.slice(-2);
-            if (lastTwoChars !== '\n\n') {
-              currentSong.fullText += '\n';
-            }
-          }
+          // Добавляем строку к тексту песни
+          currentSong.fullText += '\n' + text;
         }
       }
     }
@@ -258,44 +320,14 @@ async function getDocumentContent() {
       ? process.env.SONGBOOK_URL.split('/d/')[1].split('/')[0]
       : process.env.SONGBOOK_URL;
     
-    // Проверяем наличие всех необходимых переменных окружения
-    const hasAllCredentials = 
-      process.env.GOOGLE_CLIENT_EMAIL && 
-      process.env.GOOGLE_PRIVATE_KEY && 
-      process.env.GOOGLE_CLIENT_ID;
+    // Извлекаем данные сервисного аккаунта из переменной окружения
+    const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
     
-    // Подготавливаем private_key с учетом возможного отсутствия переменной
-    const privateKey = process.env.GOOGLE_PRIVATE_KEY 
-      ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
-      : undefined;
-    
-    let auth;
-    
-    // Инициализация Google API в зависимости от наличия переменных окружения
-    if (hasAllCredentials) {
-      console.log('Используем JWT аутентификацию с переменными окружения');
-      auth = new google.auth.GoogleAuth({
-        credentials: {
-          type: 'service_account',
-          project_id: process.env.GOOGLE_PROJECT_ID || 'default-project',
-          private_key_id: process.env.GOOGLE_PRIVATE_KEY_ID || 'default-key-id',
-          private_key: privateKey,
-          client_email: process.env.GOOGLE_CLIENT_EMAIL,
-          client_id: process.env.GOOGLE_CLIENT_ID,
-          auth_uri: "https://accounts.google.com/o/oauth2/auth",
-          token_uri: "https://oauth2.googleapis.com/token",
-          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-          client_x509_cert_url: process.env.GOOGLE_CLIENT_CERT_URL || "https://www.googleapis.com/robot/v1/metadata/x509/default.gserviceaccount.com"
-        },
-        scopes: ['https://www.googleapis.com/auth/documents.readonly']
-      });
-    } else {
-      console.log('Используем стандартную аутентификацию Application Default Credentials');
-      // Пробуем использовать Application Default Credentials
-      auth = new google.auth.GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/documents.readonly']
-      });
-    }
+    // Инициализация Google API с использованием сервисного аккаунта
+    const auth = new google.auth.GoogleAuth({
+      credentials: serviceAccount,
+      scopes: ['https://www.googleapis.com/auth/documents.readonly']
+    });
 
     const docs = google.docs({ version: 'v1', auth });
     
@@ -308,29 +340,6 @@ async function getDocumentContent() {
     return response.data;
   } catch (error) {
     console.error('Ошибка при получении документа:', error);
-    // Добавляем детальную информацию об ошибке
-    console.error('Детали ошибки:', {
-      SONGBOOK_URL_exists: !!process.env.SONGBOOK_URL,
-      GOOGLE_CLIENT_EMAIL_exists: !!process.env.GOOGLE_CLIENT_EMAIL,
-      GOOGLE_PRIVATE_KEY_exists: !!process.env.GOOGLE_PRIVATE_KEY,
-      GOOGLE_CLIENT_ID_exists: !!process.env.GOOGLE_CLIENT_ID
-    });
-    
-    if (error.message && error.message.includes('client_email')) {
-      console.error('Ошибка связана с отсутствием client_email в объекте credentials');
-      
-      // Вывод значений переменных окружения для отладки (только первые 5 символов для безопасности)
-      if (process.env.GOOGLE_CLIENT_EMAIL) {
-        console.log('GOOGLE_CLIENT_EMAIL начинается с:', process.env.GOOGLE_CLIENT_EMAIL.substring(0, 5) + '...');
-      }
-      if (process.env.GOOGLE_PRIVATE_KEY) {
-        console.log('GOOGLE_PRIVATE_KEY начинается с:', process.env.GOOGLE_PRIVATE_KEY.substring(0, 5) + '...');
-      }
-      if (process.env.GOOGLE_CLIENT_ID) {
-        console.log('GOOGLE_CLIENT_ID начинается с:', process.env.GOOGLE_CLIENT_ID.substring(0, 5) + '...');
-      }
-    }
-    
     throw error;
   }
 }
@@ -354,11 +363,7 @@ module.exports = async (req, res) => {
   try {
     // Если это GET запрос, отправляем статус
     if (req.method === 'GET') {
-      return res.json({ 
-        status: 'OK', 
-        mode: 'webhook', 
-        timestamp: new Date().toISOString() 
-      });
+      return res.json({ status: 'OK', timestamp: new Date().toISOString() });
     }
     
     // Если это не POST запрос, отклоняем
@@ -367,14 +372,7 @@ module.exports = async (req, res) => {
     }
     
     // Обрабатываем обновление от Telegram
-    const update = req.body;
-    
-    if (!update) {
-      return res.status(400).json({ error: 'No update in request body' });
-    }
-    
-    // Обрабатываем обновление через бота
-    await bot.handleUpdate(update);
+    await bot.handleUpdate(req.body);
     
     // Отправляем успешный статус
     return res.status(200).send('OK');
