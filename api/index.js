@@ -245,19 +245,62 @@ try {
   module.exports = { bot, app };
   
   // Экспорт для Vercel
-  module.exports.default = (req, res) => {
+  module.exports.default = async (req, res) => {
     detailedLog('Запрос напрямую через Vercel функцию', {
       method: req.method,
       path: req.path || req.url,
       body: req.body
     });
     
-    if (!app) {
-      detailedLog('app не инициализирован');
-      return res.status(500).json({ error: 'App initialization failed' });
+    // Для Vercel устанавливаем NODE_ENV в production
+    if (!process.env.NODE_ENV) {
+      process.env.NODE_ENV = 'production';
+      detailedLog('Установлено NODE_ENV=production для Vercel');
     }
     
-    // Позволяем Express обработать запрос
+    // Проверяем, что app инициализирован
+    if (!app) {
+      detailedLog('app не инициализирован, запускаем инициализацию');
+      return res.status(500).json({ 
+        error: 'App initialization failed',
+        message: 'Please check environment variables and logs'
+      });
+    }
+    
+    // Для GET запросов отдаем статус
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        status: 'OK', 
+        mode: process.env.NODE_ENV === 'production' ? 'webhook' : 'polling',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Для POST запросов от Telegram
+    if (req.method === 'POST' && req.body) {
+      try {
+        detailedLog('Получен webhook от Telegram', {
+          update_id: req.body.update_id,
+          has_message: Boolean(req.body.message),
+          has_callback: Boolean(req.body.callback_query)
+        });
+        
+        if (req.body.message || req.body.callback_query) {
+          // Обрабатываем обновление напрямую
+          bot.processUpdate(req.body);
+          detailedLog('Обновление успешно обработано');
+          return res.status(200).send('OK');
+        } else {
+          detailedLog('Некорректный запрос от Telegram, отсутствует message или callback_query');
+          return res.status(400).json({ error: 'Invalid Telegram update' });
+        }
+      } catch (error) {
+        detailedLog('Ошибка обработки webhook:', error);
+        return res.status(500).json({ error: 'Webhook processing error' });
+      }
+    }
+    
+    // Для всех остальных запросов передаем обработку в Express
     return app(req, res);
   };
   
