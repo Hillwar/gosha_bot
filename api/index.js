@@ -192,6 +192,16 @@ try {
     });
   });
 
+  // Для поддержки Vercel serverless
+  app.get('/', (req, res) => {
+    detailedLog('Получен GET запрос к корневому пути');
+    res.status(200).json({
+      status: 'OK',
+      message: 'Gosha Bot API is running',
+      timestamp: new Date().toISOString()
+    });
+  });
+
   // Регистрация обработчиков команд
   detailedLog('Регистрация обработчиков команд бота');
   
@@ -234,7 +244,21 @@ try {
   module.exports = { bot, app };
   
   // Экспорт для Vercel
-  module.exports.default = app;
+  module.exports.default = (req, res) => {
+    detailedLog('Запрос напрямую через Vercel функцию', {
+      method: req.method,
+      path: req.path || req.url,
+      body: req.body
+    });
+    
+    if (!app) {
+      detailedLog('app не инициализирован');
+      return res.status(500).json({ error: 'App initialization failed' });
+    }
+    
+    // Позволяем Express обработать запрос
+    return app(req, res);
+  };
   
   // ===================== ФУНКЦИИ =====================
 
@@ -305,13 +329,13 @@ try {
           else if (currentSong && nextLineIsAuthor) {
             // Эта строка - автор
             currentSong.author = text.trim();
-            currentSong.fullText = currentSong.fullText + '\n' + text;
+            currentSong.fullText = currentSong.fullText + text;
             nextLineIsAuthor = false; // Сбрасываем флаг
             detailedLog('Найден автор песни:', currentSong.author);
           }
           else if (currentSong) {
             // Добавляем строку к тексту песни
-            currentSong.fullText = currentSong.fullText + '\n' + text;
+            currentSong.fullText = currentSong.fullText + text;
           }
         }
       }
