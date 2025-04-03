@@ -287,161 +287,105 @@ try {
   // Экспорт для Vercel
   module.exports.default = async (req, res) => {
     try {
-      detailedLog('Запрос напрямую через Vercel функцию', {
-        method: req.method,
-        path: req.path || req.url,
-        body: req.body ? JSON.stringify(req.body).substring(0, 200) : null,
-        headers: Object.keys(req.headers || {})
-      });
-      
-      // Для Vercel устанавливаем NODE_ENV в production
-      if (!process.env.NODE_ENV) {
-        process.env.NODE_ENV = 'production';
-        detailedLog('Установлено NODE_ENV=production для Vercel');
-      }
-      
       // Для GET запросов отдаем статус
       if (req.method === 'GET') {
         return res.status(200).json({
           status: 'OK', 
-          mode: process.env.NODE_ENV === 'production' ? 'webhook' : 'polling',
+          mode: 'webhook',
           timestamp: new Date().toISOString()
         });
       }
       
+      // Сначала отправляем ответ 200 OK для Telegram
+      res.status(200).send('OK');
+      
       // Для POST запросов от Telegram
       if (req.method === 'POST' && req.body) {
-        // Сначала отправляем ответ, чтобы избежать таймаута
-        res.status(200).send('OK');
-        
         try {
-          // Базовая обработка для команд
-          const message = req.body.message;
+          // Простой лог запроса
+          console.log('Webhook запрос:', {
+            method: 'POST',
+            path: req.path || req.url,
+            has_message: !!req.body.message,
+            has_callback: !!req.body.callback_query
+          });
           
-          if (message && message.text && message.chat && message.chat.id) {
-            const text = message.text;
-            const chatId = message.chat.id;
+          // Обработка команд напрямую без использования bot.processUpdate
+          if (req.body.message && req.body.message.text && req.body.message.chat && req.body.message.chat.id) {
+            const text = req.body.message.text;
+            const chatId = req.body.message.chat.id;
             
-            detailedLog('Получено сообщение в webhook:', { text, chatId });
+            console.log('Сообщение:', { text, chatId });
             
-            // Простая обработка команд без использования регулярных выражений
+            // Простые команды
             if (text === '/start' || text === '/help') {
-              await sendMessageWithRetry(chatId, '🎵 Привет! Я бот для поиска песен.');
+              bot.sendMessage(chatId, '🎵 Привет! Я бот для поиска песен.');
               return;
             }
             
             if (text === '/random') {
-              await sendMessageWithRetry(chatId, '🔍 Ищу случайную песню...');
-              try {
-                const songs = await getSongs();
+              bot.sendMessage(chatId, '🔍 Выполняю команду /random...');
+              // Получаем песни
+              getSongs().then(songs => {
                 if (songs && songs.length > 0) {
                   const validSongs = songs.filter(song => song.title && song.title.length > 2);
                   if (validSongs.length > 0) {
                     const randomSong = validSongs[Math.floor(Math.random() * validSongs.length)];
-                    await sendSong(chatId, randomSong.title, randomSong.author, randomSong.fullText);
+                    sendSong(chatId, randomSong.title, randomSong.author, randomSong.fullText);
                   } else {
-                    await sendMessageWithRetry(chatId, 'Песни не найдены.');
+                    bot.sendMessage(chatId, 'Песни не найдены.');
                   }
                 } else {
-                  await sendMessageWithRetry(chatId, 'Не удалось получить список песен. Попробуйте позже.');
+                  bot.sendMessage(chatId, 'Не удалось получить список песен.');
                 }
-              } catch (e) {
-                detailedLog('Ошибка при выполнении команды /random:', e);
-                await sendMessageWithRetry(chatId, 'Произошла ошибка. Попробуйте позже.');
-              }
+              }).catch(error => {
+                console.error('Ошибка /random:', error);
+                bot.sendMessage(chatId, 'Произошла ошибка при выполнении команды.');
+              });
               return;
             }
             
-            if (text === '/list') {
-              await sendMessageWithRetry(chatId, '🔍 Загружаю список песен...');
-              try {
-                const songs = await getSongs();
-                if (songs && songs.length > 0) {
-                  const validSongs = songs
-                    .filter(song => song.title && song.title.length > 2)
-                    .sort((a, b) => a.title.localeCompare(b.title, 'ru'));
-                    
-                  if (validSongs.length > 0) {
-                    let message = `Список песен (${validSongs.length}):\n`;
-                    // Ограничиваем до 50 первых песен
-                    for (let i = 0; i < Math.min(50, validSongs.length); i++) {
-                      message += `\n${i+1}. ${validSongs[i].title}`;
+            // Простой поиск для всех остальных сообщений
+            bot.sendMessage(chatId, `🔍 Ищу песни по запросу: "${text}"`);
+            getSongs().then(songs => {
+              if (songs && songs.length > 0) {
+                const results = songs.filter(song => 
+                  song.title.toLowerCase().includes(text.toLowerCase()) || 
+                  (song.author && song.author.toLowerCase().includes(text.toLowerCase())) ||
+                  song.fullText.toLowerCase().includes(text.toLowerCase())
+                );
+                
+                if (results.length > 0) {
+                  if (results.length === 1) {
+                    sendSong(chatId, results[0].title, results[0].author, results[0].fullText);
+                  } else {
+                    let message = `Найдено ${results.length} песен:\n`;
+                    for (let i = 0; i < Math.min(5, results.length); i++) {
+                      message += `\n${i+1}. ${results[i].title}`;
                     }
-                    await sendMessageWithRetry(chatId, message);
-                  } else {
-                    await sendMessageWithRetry(chatId, 'Песни не найдены.');
+                    bot.sendMessage(chatId, message);
                   }
                 } else {
-                  await sendMessageWithRetry(chatId, 'Не удалось получить список песен. Попробуйте позже.');
+                  bot.sendMessage(chatId, `По запросу "${text}" ничего не найдено.`);
                 }
-              } catch (e) {
-                detailedLog('Ошибка при выполнении команды /list:', e);
-                await sendMessageWithRetry(chatId, 'Произошла ошибка. Попробуйте позже.');
+              } else {
+                bot.sendMessage(chatId, 'Не удалось получить список песен.');
               }
-              return;
-            }
-            
-            // Обработка поиска (если не команда, считаем поисковым запросом)
-            if (!text.startsWith('/')) {
-              await sendMessageWithRetry(chatId, `🔍 Ищу песню: "${text}"...`);
-              try {
-                const songs = await getSongs();
-                if (songs && songs.length > 0) {
-                  const results = filterSongs(songs, text);
-                  if (results.length > 0) {
-                    if (results.length === 1) {
-                      // Одна песня - отправляем сразу
-                      await sendSong(chatId, results[0].title, results[0].author, results[0].fullText);
-                    } else {
-                      // Список найденных песен
-                      let message = `Найдено ${results.length} песен по запросу "${text}":\n`;
-                      for (let i = 0; i < Math.min(5, results.length); i++) {
-                        message += `\n${i+1}. ${results[i].title}${results[i].author ? ' - ' + results[i].author : ''}`;
-                      }
-                      await sendMessageWithRetry(chatId, message);
-                    }
-                  } else {
-                    await sendMessageWithRetry(chatId, `По запросу "${text}" ничего не найдено.`);
-                  }
-                } else {
-                  await sendMessageWithRetry(chatId, 'Не удалось получить список песен. Попробуйте позже.');
-                }
-              } catch (e) {
-                detailedLog('Ошибка при выполнении поиска:', e);
-                await sendMessageWithRetry(chatId, 'Произошла ошибка при поиске. Попробуйте позже.');
-              }
-              return;
-            }
+            }).catch(error => {
+              console.error('Ошибка поиска:', error);
+              bot.sendMessage(chatId, 'Произошла ошибка при поиске.');
+            });
           }
-          
-          if (req.body.callback_query) {
-            // Обработка callback запросов
-            const callback = req.body.callback_query;
-            const data = callback.data;
-            const chatId = callback.message.chat.id;
-            
-            detailedLog('Получен callback_query в webhook:', { data, chatId });
-            
-            // Простая обработка callback (для выбора песни)
-            if (data && data.startsWith('song_')) {
-              await sendMessageWithRetry(chatId, 'Функция выбора песни из списка сейчас недоступна, пожалуйста, используйте поиск напрямую.');
-            }
-          }
-          
         } catch (error) {
-          detailedLog('Ошибка обработки webhook запроса:', error);
+          console.error('Ошибка обработки webhook:', error);
         }
-        
-        return;
       }
       
-      // Для всех остальных запросов
-      return res.status(405).json({ error: 'Method not allowed' });
-      
+      return;
     } catch (error) {
-      detailedLog('Необработанная ошибка в serverless функции:', error);
+      console.error('Критическая ошибка в serverless функции:', error);
       if (!res.headersSent) {
-        return res.status(500).json({ error: 'Internal server error', message: error.message });
+        return res.status(500).json({ error: 'Internal server error' });
       }
     }
   };
