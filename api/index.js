@@ -105,6 +105,10 @@ try {
   // Инициализация Google API
   detailedLog('Инициализация Google API...');
   
+  // Объявляем auth и docs в глобальной области видимости
+  let auth;
+  let docs;
+  
   try {
     if (!process.env.GOOGLE_SERVICE_ACCOUNT) {
       throw new Error('GOOGLE_SERVICE_ACCOUNT отсутствует в переменных окружения');
@@ -116,12 +120,12 @@ try {
       client_email: googleCredentials.client_email
     });
     
-    const auth = new google.auth.GoogleAuth({
+    auth = new google.auth.GoogleAuth({
       credentials: googleCredentials,
       scopes: ['https://www.googleapis.com/auth/documents.readonly']
     });
 
-    const docs = google.docs({ version: 'v1', auth });
+    docs = google.docs({ version: 'v1', auth });
     detailedLog('Google API успешно инициализирован');
   } catch (error) {
     detailedLog('Ошибка инициализации Google API:', error);
