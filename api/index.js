@@ -142,15 +142,36 @@ try {
       throw new Error('BOT_TOKEN отсутствует в переменных окружения');
     }
     
+    // Настройка параметров запроса
+    const requestOptions = {
+      agent: false,
+      pool: { maxSockets: 100 },
+      timeout: 30000, // Увеличиваем таймаут до 30 секунд
+      forever: true, // Использовать keep-alive соединения
+      retryAfter: 1000,
+      gzip: true
+    };
+    
     if (process.env.NODE_ENV === 'production') {
       // В продакшн используем webhook
-      bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false });
+      bot = new TelegramBot(process.env.BOT_TOKEN, { 
+        polling: false,
+        request: requestOptions
+      });
       detailedLog('Бот запущен в режиме webhook');
     } else {
       // В разработке используем polling
-      bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+      bot = new TelegramBot(process.env.BOT_TOKEN, { 
+        polling: true,
+        request: requestOptions
+      });
       detailedLog('Бот запущен в режиме polling');
     }
+    
+    // Добавляем обработчик ошибок для объекта бота
+    bot.on('error', (error) => {
+      detailedLog('Ошибка Telegram Bot API:', error);
+    });
     
     detailedLog('Telegram Bot успешно инициализирован');
   } catch (error) {
@@ -170,16 +191,37 @@ try {
     try {
       if (req.body && (req.body.message || req.body.callback_query)) {
         detailedLog('Обработка webhook обновления от Telegram');
-        bot.processUpdate(req.body);
-        detailedLog('Webhook обновление успешно обработано');
-        res.sendStatus(200);
+        
+        // Проверяем наличие обязательных полей
+        if (req.body.message && (!req.body.message.chat || !req.body.message.chat.id)) {
+          detailedLog('Некорректный формат message в webhook запросе');
+          res.status(400).json({ error: 'Invalid message format' });
+          return;
+        }
+        
+        if (req.body.callback_query && (!req.body.callback_query.message || 
+            !req.body.callback_query.message.chat || !req.body.callback_query.id)) {
+          detailedLog('Некорректный формат callback_query в webhook запросе');
+          res.status(400).json({ error: 'Invalid callback_query format' });
+          return;
+        }
+        
+        try {
+          // Безопасно обрабатываем обновление
+          bot.processUpdate(req.body);
+          detailedLog('Webhook обновление успешно обработано');
+          res.sendStatus(200);
+        } catch (processError) {
+          detailedLog('Ошибка при обработке webhook через processUpdate:', processError);
+          res.status(500).json({ error: 'Process update error', details: processError.message });
+        }
       } else {
         detailedLog('Некорректный webhook запрос, отсутствует message или callback_query');
-        res.sendStatus(400);
+        res.status(400).json({ error: 'Invalid request format' });
       }
     } catch (error) {
       detailedLog('Ошибка обработки webhook:', error);
-      res.status(500).send('Internal Server Error');
+      res.status(500).json({ error: 'Internal Server Error', details: error.message });
     }
   });
 
@@ -249,7 +291,8 @@ try {
     detailedLog('Запрос напрямую через Vercel функцию', {
       method: req.method,
       path: req.path || req.url,
-      body: req.body
+      body: req.body,
+      headers: Object.keys(req.headers)
     });
     
     // Для Vercel устанавливаем NODE_ENV в production
@@ -258,50 +301,124 @@ try {
       detailedLog('Установлено NODE_ENV=production для Vercel');
     }
     
-    // Проверяем, что app инициализирован
-    if (!app) {
-      detailedLog('app не инициализирован, запускаем инициализацию');
-      return res.status(500).json({ 
-        error: 'App initialization failed',
-        message: 'Please check environment variables and logs'
-      });
-    }
+    // Обработка с таймаутом
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('Request processing timeout'));
+      }, 9000); // Таймаут 9 секунд (меньше чем у Vercel)
+    });
     
-    // Для GET запросов отдаем статус
-    if (req.method === 'GET') {
-      return res.status(200).json({
-        status: 'OK', 
-        mode: process.env.NODE_ENV === 'production' ? 'webhook' : 'polling',
-        timestamp: new Date().toISOString()
-      });
-    }
-    
-    // Для POST запросов от Telegram
-    if (req.method === 'POST' && req.body) {
-      try {
-        detailedLog('Получен webhook от Telegram', {
-          update_id: req.body.update_id,
-          has_message: Boolean(req.body.message),
-          has_callback: Boolean(req.body.callback_query)
-        });
-        
-        if (req.body.message || req.body.callback_query) {
-          // Обрабатываем обновление напрямую
-          bot.processUpdate(req.body);
-          detailedLog('Обновление успешно обработано');
-          return res.status(200).send('OK');
-        } else {
-          detailedLog('Некорректный запрос от Telegram, отсутствует message или callback_query');
-          return res.status(400).json({ error: 'Invalid Telegram update' });
+    try {
+      const resultPromise = new Promise(async (resolve) => {
+        try {
+          // Проверяем, что app инициализирован
+          if (!app) {
+            detailedLog('app не инициализирован, запускаем инициализацию');
+            return res.status(500).json({ 
+              error: 'App initialization failed',
+              message: 'Please check environment variables and logs'
+            });
+          }
+          
+          // Для GET запросов отдаем статус
+          if (req.method === 'GET') {
+            resolve(res.status(200).json({
+              status: 'OK', 
+              mode: process.env.NODE_ENV === 'production' ? 'webhook' : 'polling',
+              timestamp: new Date().toISOString()
+            }));
+            return;
+          }
+          
+          // Для POST запросов от Telegram
+          if (req.method === 'POST' && req.body) {
+            try {
+              // Проверяем, что тело запроса содержит данные от Telegram
+              const hasMessage = req.body && req.body.message;
+              const hasCallback = req.body && req.body.callback_query;
+              
+              detailedLog('Получен webhook от Telegram', {
+                update_id: req.body.update_id,
+                has_message: Boolean(hasMessage),
+                has_callback: Boolean(hasCallback),
+                chat_id: hasMessage ? req.body.message.chat?.id : (hasCallback ? req.body.callback_query.message?.chat?.id : null)
+              });
+              
+              if (hasMessage || hasCallback) {
+                // Проверяем валидность данных перед обработкой
+                try {
+                  // Валидация message
+                  if (hasMessage) {
+                    // Проверяем наличие обязательных полей
+                    if (!req.body.message.chat || !req.body.message.chat.id) {
+                      detailedLog('Некорректный формат message в webhook запросе, отсутствует chat.id');
+                      resolve(res.status(400).json({ error: 'Invalid message format' }));
+                      return;
+                    }
+                  }
+                  
+                  // Валидация callback_query
+                  if (hasCallback) {
+                    if (!req.body.callback_query.message || !req.body.callback_query.message.chat || 
+                        !req.body.callback_query.message.chat.id || !req.body.callback_query.id) {
+                      detailedLog('Некорректный формат callback_query в webhook запросе');
+                      resolve(res.status(400).json({ error: 'Invalid callback_query format' }));
+                      return;
+                    }
+                  }
+                  
+                  try {
+                    // Отправляем сначала ответ клиенту для предотвращения таймаута
+                    resolve(res.status(200).send('OK'));
+                    
+                    // Затем обрабатываем обновление напрямую
+                    bot.processUpdate(req.body);
+                    detailedLog('Обновление успешно обработано');
+                  } catch (processError) {
+                    detailedLog('Ошибка при обработке webhook через processUpdate:', processError);
+                    // Ответ уже отправлен, логируем ошибку
+                  }
+                } catch (validationError) {
+                  detailedLog('Ошибка валидации webhook данных:', validationError);
+                  resolve(res.status(400).json({ error: 'Data validation error', details: validationError.message }));
+                  return;
+                }
+              } else {
+                detailedLog('Некорректный запрос от Telegram, отсутствует message или callback_query');
+                resolve(res.status(400).json({ error: 'Invalid Telegram update' }));
+                return;
+              }
+            } catch (error) {
+              detailedLog('Ошибка обработки webhook:', error);
+              resolve(res.status(500).json({ error: 'Webhook processing error', details: error.message }));
+              return;
+            }
+          } else {
+            // Для всех остальных запросов передаем обработку в Express
+            app(req, res);
+            resolve();
+            return;
+          }
+        } catch (error) {
+          detailedLog('Необработанная ошибка в serverless функции:', error);
+          if (!res.headersSent) {
+            resolve(res.status(500).json({ error: 'Internal server error', details: error.message }));
+          } else {
+            resolve();
+          }
+          return;
         }
-      } catch (error) {
-        detailedLog('Ошибка обработки webhook:', error);
-        return res.status(500).json({ error: 'Webhook processing error' });
+      });
+      
+      // Ожидаем результат с ограничением по времени
+      await Promise.race([resultPromise, timeoutPromise]);
+      
+    } catch (timeoutError) {
+      detailedLog('Таймаут обработки запроса:', timeoutError);
+      if (!res.headersSent) {
+        return res.status(408).json({ error: 'Request timeout' });
       }
     }
-    
-    // Для всех остальных запросов передаем обработку в Express
-    return app(req, res);
   };
   
   // ===================== ФУНКЦИИ =====================
@@ -482,11 +599,16 @@ try {
   async function showAnimatedLoading(chatId, actionText, duration = 3000) {
     // Проверяем, отключены ли анимации
     if (process.env.DISABLE_ANIMATIONS === 'true') {
-      const message = await bot.sendMessage(chatId, `🔍 ${actionText}...`);
-      return {
-        message,
-        stop: () => {}
-      };
+      try {
+        const message = await sendMessageWithRetry(chatId, `🔍 ${actionText}...`);
+        return {
+          message,
+          stop: () => {}
+        };
+      } catch (error) {
+        detailedLog('Ошибка отправки начального сообщения:', error);
+        throw error;
+      }
     }
     
     // Варианты анимации - упрощаю для скорости
@@ -496,14 +618,6 @@ try {
         '🔍 Загрузка...',
         '🔍 Загрузка..',
         '🔍 Загрузка.'
-      ],
-      
-      // Короткий прогресс-бар
-      progressBar: [
-        '⬜⬜⬜',
-        '🟦⬜⬜',
-        '🟦🟦⬜',
-        '🟦🟦🟦'
       ]
     };
     
@@ -511,10 +625,16 @@ try {
     const selectedAnimation = animationSets.simple;
     
     // Отправляем начальное сообщение
-    const message = await bot.sendMessage(
-      chatId, 
-      `${selectedAnimation[0]} ${actionText}...`
-    );
+    let message;
+    try {
+      message = await sendMessageWithRetry(
+        chatId, 
+        `${selectedAnimation[0]} ${actionText}...`
+      );
+    } catch (error) {
+      detailedLog('Ошибка отправки начального сообщения:', error);
+      throw error;
+    }
     
     let currentFrame = 0;
     const startTime = Date.now();
@@ -531,7 +651,7 @@ try {
       currentFrame = (currentFrame + 1) % selectedAnimation.length;
       
       try {
-        // Обновляем сообщение
+        // Обновляем сообщение с повторными попытками
         await bot.editMessageText(
           `${selectedAnimation[currentFrame]} ${actionText}...`,
           {
@@ -694,13 +814,13 @@ try {
       
       // Отправляем ссылку на аккордник после песни
       const songbookUrl = process.env.SONGBOOK_URL || 'https://docs.google.com/document/d/1UPg7HOeYbU-MxG_NlM-w5h-ReLpaaZSNg_cB_KUPaqM/edit';
-      await bot.sendMessage(chatId, `<a href="${songbookUrl}">Открыть аккордник</a>`, {
+      await sendMessageWithRetry(chatId, `<a href="${songbookUrl}">Открыть аккордник</a>`, {
         parse_mode: 'HTML',
         disable_web_page_preview: true
       });
     } catch (error) {
       console.error('Ошибка отправки песни:', error.message);
-      await bot.sendMessage(chatId, 'Произошла ошибка при отправке песни.');
+      await sendMessageWithRetry(chatId, 'Произошла ошибка при отправке песни.');
     }
   }
 
@@ -845,7 +965,7 @@ try {
       
       // Если укладывается, отправляем целиком
       if (text.length <= maxLength) {
-        await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+        await sendMessageWithRetry(chatId, text, { parse_mode: 'HTML' });
         return;
       }
       
@@ -881,7 +1001,7 @@ try {
         // Проверяем лимит с учетом следующей строки
         if (currentPart.length + line.length + 1 > maxLength) {
           if (currentPart.trim()) {
-            await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
+            await sendMessageWithRetry(chatId, currentPart, { parse_mode: 'HTML' });
           }
           
           // Новая часть с заголовком
@@ -898,7 +1018,7 @@ try {
       
       // Отправляем последнюю часть
       if (currentPart.trim()) {
-        await bot.sendMessage(chatId, currentPart, { parse_mode: 'HTML' });
+        await sendMessageWithRetry(chatId, currentPart, { parse_mode: 'HTML' });
       }
     } catch (error) {
       console.error('Ошибка отправки длинного сообщения:', error.message);
@@ -1253,6 +1373,35 @@ try {
       console.error('Ошибка получения правил круга:', error.message);
       await bot.sendMessage(chatId, 'Произошла ошибка или запрос занял слишком много времени. Попробуйте позже.');
     }
+  }
+
+  /**
+   * Отправка сообщения с повторными попытками при сетевых ошибках
+   */
+  async function sendMessageWithRetry(chatId, text, options = {}) {
+    const maxRetries = 3;
+    let lastError;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const result = await bot.sendMessage(chatId, text, options);
+        return result;
+      } catch (error) {
+        lastError = error;
+        detailedLog(`Ошибка отправки сообщения (попытка ${attempt + 1}/${maxRetries}):`, error);
+        
+        // Если не сетевая ошибка, не пытаемся повторять
+        if (!error.code || !['EFATAL', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED'].includes(error.code)) {
+          break;
+        }
+        
+        // Ждем перед следующей попыткой (увеличиваем время ожидания с каждой попыткой)
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+    }
+    
+    // Все попытки исчерпаны, пробрасываем ошибку
+    throw lastError;
   }
 }
 catch (error) {
