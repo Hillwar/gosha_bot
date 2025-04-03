@@ -306,20 +306,36 @@ async function performSearch(ctx, query) {
 
 // Форматирование песни для отображения
 function formatSongForDisplay(song) {
-  let formattedText = `${song.title}\n`;
-  if (song.author) {
-    formattedText += `${song.author}\n\n`;
-  } else {
-    formattedText += '\n';
-  }
-  
-  // Добавляем текст песни
+  // Разделяем текст песни на строки
   const lines = song.fullText.split('\n');
-  let skipLines = 2; // Пропускаем заголовок и автора
   
-  for (let i = skipLines; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line) {
+  // Строим новый текст
+  let formattedText = '';
+  let titleFound = false;
+  let authorFound = false;
+  
+  // Обрабатываем каждую строку песни
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Обрабатываем строку с названием (содержит символ ♭)
+    if (!titleFound && line.includes('♭')) {
+      // Добавляем название без символа ♭
+      formattedText += line.replace('♭', '').trim() + '\n';
+      titleFound = true;
+      continue;
+    }
+    
+    // Обрабатываем строку с автором (следующая после названия)
+    if (titleFound && !authorFound) {
+      formattedText += line.trim() + '\n\n';
+      authorFound = true;
+      continue;
+    }
+    
+    // Добавляем все остальные строки как текст песни
+    if (titleFound && authorFound) {
+      // Сохраняем все строки, включая пустые, чтобы сохранить форматирование
       formattedText += line + '\n';
     }
   }
