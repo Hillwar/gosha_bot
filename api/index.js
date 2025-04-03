@@ -3,10 +3,6 @@ const { Telegraf } = require('telegraf');
 const { google } = require('googleapis');
 const fs = require('fs');
 
-// Настройки Google API
-const SCOPES = ['https://www.googleapis.com/auth/documents.readonly'];
-const CREDENTIALS_PATH = 'credentials.json';
-
 // Настройка бота
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -257,16 +253,24 @@ async function getSongs() {
 // Получение содержимого документа
 async function getDocumentContent() {
   try {
-    // Инициализация Google API
-    const auth = await authorize();
-    const docs = google.docs({ version: 'v1', auth });
-    
     // Получаем ID документа из URL
     const documentId = process.env.SONGBOOK_URL.includes('/d/') 
       ? process.env.SONGBOOK_URL.split('/d/')[1].split('/')[0]
       : process.env.SONGBOOK_URL;
     
-    // Запрашиваем документ с таймаутом
+    // Инициализация Google API с использованием переменных окружения
+    const auth = new google.auth.GoogleAuth({
+      credentials: {
+        client_email: process.env.GOOGLE_CLIENT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        client_id: process.env.GOOGLE_CLIENT_ID
+      },
+      scopes: ['https://www.googleapis.com/auth/documents.readonly']
+    });
+
+    const docs = google.docs({ version: 'v1', auth });
+    
+    // Запрашиваем документ
     const response = await docs.documents.get({ 
       documentId,
       timeout: 30000 // 30 секунд таймаут
@@ -275,37 +279,6 @@ async function getDocumentContent() {
     return response.data;
   } catch (error) {
     console.error('Ошибка при получении документа:', error);
-    throw error;
-  }
-}
-
-// Авторизация в Google API
-async function authorize() {
-  try {
-    // Проверяем наличие credentials.json
-    if (!fs.existsSync(CREDENTIALS_PATH)) {
-      console.error('Не найден файл credentials.json с данными для доступа к Google API');
-      throw new Error('Missing credentials file');
-    }
-    
-    const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
-    const { client_secret, client_id, redirect_uris } = credentials.installed || credentials.web;
-    
-    const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
-    
-    // Проверяем наличие токена
-    const TOKEN_PATH = 'token.json';
-    if (!fs.existsSync(TOKEN_PATH)) {
-      console.error('Не найден файл token.json с токеном доступа к Google API');
-      throw new Error('Missing token file');
-    }
-    
-    const token = JSON.parse(fs.readFileSync(TOKEN_PATH));
-    oAuth2Client.setCredentials(token);
-    
-    return oAuth2Client;
-  } catch (error) {
-    console.error('Ошибка авторизации в Google API:', error);
     throw error;
   }
 }
