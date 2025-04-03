@@ -441,22 +441,36 @@ try {
       detailedLog('Запрос к Google Docs API, documentId:', documentId);
       
       // Устанавливаем таймаут для запроса
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Timeout')), 10000)
-      );
+      const timeoutPromise = new Promise((_, reject) => {
+        const timeoutId = setTimeout(() => {
+          clearTimeout(timeoutId);
+          reject(new Error('Timeout при получении документа'));
+        }, 20000); // Увеличиваем таймаут до 20 секунд
+      });
       
       // Выполняем запрос с таймаутом
       const documentPromise = docs.documents.get({ documentId });
-      const document = await Promise.race([documentPromise, timeoutPromise]);
       
+      // Используем Promise.race с правильной обработкой ошибок
+      const result = await Promise.race([
+        documentPromise.then(response => ({ success: true, data: response.data })),
+        timeoutPromise.then(() => ({ success: false, error: new Error('Timeout') }))
+      ]);
+      
+      // Обрабатываем результат
+      if (!result.success) {
+        throw result.error;
+      }
+      
+      const document = result.data;
       detailedLog('Документ успешно получен, размер:', 
-                  document.data.body.content ? document.data.body.content.length : 'unknown');
+                  document.body.content ? document.body.content.length : 'unknown');
       
-      docCache.content = document.data;
+      docCache.content = document;
       docCache.lastUpdate = now;
-      // Увеличиваем время кеширования до 15 минут
-      docCache.updateInterval = 15 * 60 * 1000;
-      return document.data;
+      // Увеличиваем время кеширования до 30 минут
+      docCache.updateInterval = 30 * 60 * 1000;
+      return document;
     } catch (error) {
       detailedLog('Ошибка получения документа:', error);
       
@@ -466,7 +480,8 @@ try {
         return docCache.content;
       }
       
-      throw error;
+      // Если кеша нет и произошла ошибка, возвращаем пустой документ
+      return { body: { content: [] } };
     }
   }
 
@@ -476,23 +491,23 @@ try {
   async function getSongs() {
     detailedLog('Извлечение песен из документа');
     try {
-      // Если запущено на Vercel, используем предзагруженный кэш для надежности
-      if (process.env.NODE_ENV === 'production') {
-        detailedLog('Используем предзагруженный кэш песен для Vercel');
-        // Возвращаем базовый набор песен для быстрой работы
-        return backupSongCache;
-      }
-      
-      // В режиме разработки пытаемся получить документ по API
+      // Запрашиваем документ независимо от окружения
       try {
         const document = await getDocumentContent();
+        
+        // Если документ пустой, используем резервный кэш
+        if (!document.body || !document.body.content || document.body.content.length === 0) {
+          detailedLog('Документ пустой, используем резервный кэш');
+          return backupSongCache;
+        }
+        
         const songs = [];
         let currentSong = null;
         let nextLineIsAuthor = false;
         
         // Добавляем таймаут для обработки документа
         const processStart = Date.now();
-        const maxProcessTime = 5000; // Максимальное время обработки документа - 5 секунд
+        const maxProcessTime = 10000; // Увеличиваем время обработки до 10 секунд
         
         detailedLog('Начинаем обработку элементов документа');
         
@@ -526,13 +541,13 @@ try {
             else if (currentSong && nextLineIsAuthor) {
               // Эта строка - автор
               currentSong.author = text.trim();
-              currentSong.fullText = currentSong.fullText + text;
+              currentSong.fullText = currentSong.fullText + "\n" + text;
               nextLineIsAuthor = false; // Сбрасываем флаг
               detailedLog('Найден автор песни:', currentSong.author);
             }
             else if (currentSong) {
               // Добавляем строку к тексту песни
-              currentSong.fullText = currentSong.fullText + text;
+              currentSong.fullText = currentSong.fullText + "\n" + text;
             }
           }
         }
@@ -550,7 +565,7 @@ try {
         const filteredSongs = songs.filter(song => song.title && song.title.trim().length > 2);
         detailedLog('Извлечение песен завершено, найдено:', filteredSongs.length);
         
-        // Если удалось получить песни по API, используем их
+        // Если удалось получить песни, используем их
         if (filteredSongs.length > 0) {
           return filteredSongs;
         }
