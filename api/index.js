@@ -21,8 +21,9 @@ const userStates = {};
 
 // Константы для состояний
 const STATES = {
-  DEFAULT: 'default',        // Обычный режим - обрабатывать сообщения как поиск
-  AWAITING_SELECTION: 'awaiting_selection'  // Ожидание выбора песни
+  DEFAULT: 'default',        // Обычный режим - не обрабатывать сообщения как поиск
+  AWAITING_SELECTION: 'awaiting_selection',  // Ожидание выбора песни
+  AWAITING_SEARCH_QUERY: 'awaiting_search_query' // Ожидание поискового запроса
 };
 
 // Добавляем набор анимированных сообщений о загрузке
@@ -128,14 +129,17 @@ bot.command('help', (ctx) => {
 
 // Команда /search
 bot.command('search', async (ctx) => {
-  // Сбрасываем состояние на DEFAULT
-  setUserState(ctx.from.id, STATES.DEFAULT);
+  // Устанавливаем состояние ожидания поискового запроса
+  setUserState(ctx.from.id, STATES.AWAITING_SEARCH_QUERY);
   
   const query = ctx.message.text.replace('/search', '').trim();
-  if (!query) {
-    return ctx.reply('Напиши название песни или часть текста для поиска');
+  if (query) {
+    // Если запрос уже есть в команде, выполняем поиск сразу
+    await performSearch(ctx, query);
+  } else {
+    // Иначе просим ввести запрос
+    await ctx.reply('Введите название песни в ответе на это сообщение');
   }
-  await performSearch(ctx, query);
 });
 
 // Команда /list
@@ -427,12 +431,23 @@ bot.on('text', async (ctx) => {
       
       return;
     }
-    // Если это не номер песни, выполняем новый поиск
+    // Если это не номер песни, не выполняем новый поиск
+    // Просто сбрасываем состояние
+    setUserState(userId, STATES.DEFAULT);
+    await ctx.reply('❌ Неверный номер песни. Поиск отменен. Используйте /search для нового поиска.');
+    return;
   }
   
-  // Если пользователь в обычном режиме или ввел не число в режиме выбора,
-  // выполняем поиск песни
-  await performSearch(ctx, ctx.message.text);
+  // Если пользователь в режиме ожидания поискового запроса, выполняем поиск
+  if (userState.state === STATES.AWAITING_SEARCH_QUERY) {
+    // Выполняем поиск по запросу
+    await performSearch(ctx, ctx.message.text);
+    return;
+  }
+  
+  // В обычном режиме игнорируем все сообщения, не предлагаем поиск
+  // Можно добавить подсказку о команде /search
+  await ctx.reply('Используйте /search для поиска песен.');
 });
 
 // Функция поиска песни
