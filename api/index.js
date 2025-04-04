@@ -11,6 +11,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // Кэш документа и песен для оптимизации
 const cache = {
   songs: [],
+  rules: '',
   lastUpdate: null,
   updateInterval: 30 * 60 * 1000 // 30 минут
 };
@@ -263,28 +264,8 @@ bot.command('circlerules', async (ctx) => {
   );
   
   try {
-    // Получаем документ
-    const document = await getDocumentContent();
-    let rules = '';
-    let foundSongStart = false;
-    
-    // Ищем текст до первого символа ♭
-    for (const element of document.body.content) {
-      if (element.paragraph) {
-        const text = extractParagraphText(element.paragraph);
-        
-        if (text.includes('♭')) {
-          // Достигли первой песни
-          foundSongStart = true;
-          break;
-        }
-        
-        // Добавляем текст к правилам
-        if (text.trim()) {
-          rules += text.trim() + '\n';
-        }
-      }
-    }
+    // Получаем правила орлятского круга
+    const rules = await getRules();
     
     // Останавливаем анимацию
     await animation.stop();
@@ -298,12 +279,12 @@ bot.command('circlerules', async (ctx) => {
       console.log('Не удалось удалить сообщение загрузки:', e.message);
     }
     
-    if (!foundSongStart || rules.trim().length === 0) {
+    if (!rules) {
       await ctx.reply('❌ Не удалось найти правила орлятского круга в документе.');
       return;
     }
     
-    await ctx.reply('📜 Правила орлятского круга:\n\n' + rules.trim());
+    await ctx.reply('📜 Правила орлятского круга:\n\n' + rules);
     
   } catch (error) {
     console.error('Ошибка при получении правил:', error);
@@ -450,7 +431,7 @@ function formatSongForDisplay(song) {
       if (author) {
         formattedText += `👤 : ${author}\n`;
       }
-      formattedText += '\n' + '┈'.repeat(30) + '\n\n';
+      formattedText += '\n' + '┈'.repeat(30);
       authorFound = true;
       continue;
     }
@@ -481,7 +462,7 @@ function formatSongForDisplay(song) {
   }
   
   // Добавляем декоративный элемент в конце
-  formattedText += '\n' + '┈'.repeat(30);
+  formattedText += '┈'.repeat(30);
   
   return formattedText;
 }
@@ -612,6 +593,62 @@ function extractParagraphText(paragraph) {
       return '';
     })
     .join('');
+}
+
+// Получение правил орлятского круга с кешированием
+async function getRules() {
+  try {
+    // Проверяем кэш
+    const now = Date.now();
+    if (cache.rules && cache.lastUpdate && (now - cache.lastUpdate < cache.updateInterval)) {
+      return cache.rules;
+    }
+    
+    // Если нет в кеше, загружаем из документа
+    const document = await getDocumentContent();
+    if (!document || !document.body || !document.body.content) {
+      console.error('Документ пустой или имеет неправильный формат');
+      return null;
+    }
+    
+    let rules = '';
+    let foundSongStart = false;
+    
+    // Ищем текст до первого символа ♭
+    for (const element of document.body.content) {
+      if (element.paragraph) {
+        const text = extractParagraphText(element.paragraph);
+        
+        if (text.includes('♭')) {
+          // Достигли первой песни
+          foundSongStart = true;
+          break;
+        }
+        
+        // Добавляем текст к правилам
+        if (text.trim()) {
+          rules += text.trim() + '\n';
+        }
+      }
+    }
+    
+    if (!foundSongStart || rules.trim().length === 0) {
+      return null;
+    }
+    
+    // Сохраняем правила в кеш
+    cache.rules = rules.trim();
+    
+    // Обновляем дату последнего обновления кеша, если ещё не установлена
+    if (!cache.lastUpdate) {
+      cache.lastUpdate = now;
+    }
+    
+    return cache.rules;
+  } catch (error) {
+    console.error('Ошибка при получении правил:', error);
+    return null;
+  }
 }
 
 // Обработка вебхуков для Vercel
