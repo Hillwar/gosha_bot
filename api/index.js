@@ -86,6 +86,17 @@ async function animateLoading(ctx, initialMessage, animationTexts, duration = 50
   }
 }
 
+// Функция для получения состояния пользователя
+function getUserState(userId) {
+  // Если состояние не установлено или устарело (более 10 минут), возвращаем DEFAULT
+  const userState = userStates[userId];
+  console.log(`Получение состояния для пользователя ${userId}:`, userState);
+  if (!userState || Date.now() - userState.timestamp > 10 * 60 * 1000) {
+    return { state: STATES.DEFAULT, data: {} };
+  }
+  return userState;
+}
+
 // Функция для установки состояния пользователя
 function setUserState(userId, state, data = {}) {
   userStates[userId] = {
@@ -93,16 +104,7 @@ function setUserState(userId, state, data = {}) {
     timestamp: Date.now(),
     data
   };
-}
-
-// Функция для получения состояния пользователя
-function getUserState(userId) {
-  // Если состояние не установлено или устарело (более 10 минут), возвращаем DEFAULT
-  const userState = userStates[userId];
-  if (!userState || Date.now() - userState.timestamp > 10 * 60 * 1000) {
-    return { state: STATES.DEFAULT, data: {} };
-  }
-  return userState;
+  console.log(`Установлено состояние для пользователя ${userId}:`, state, data);
 }
 
 // Функция для удаления команды и упоминания бота из текста сообщения
@@ -143,11 +145,14 @@ bot.command('help', (ctx) => {
 
 // Команда /search
 bot.command('search', async (ctx) => {
+  console.log('Вызвана команда /search в чате:', ctx.chat.type, 'пользователем:', ctx.from.id);
+  
   // Устанавливаем состояние ожидания поискового запроса
   setUserState(ctx.from.id, STATES.AWAITING_SEARCH_QUERY);
   
   // Очищаем текст от команды и упоминания бота
   const query = cleanCommandText(ctx.message.text, 'search');
+  console.log('Очищенный запрос из команды /search:', query);
   
   if (query) {
     // Если запрос уже есть в команде, выполняем поиск сразу
@@ -438,23 +443,22 @@ function isCommand(text) {
 
 // Обработка текстовых сообщений
 bot.on('text', async (ctx) => {
+  console.log('Получено текстовое сообщение в чате:', ctx.chat.type, 'от пользователя:', ctx.from.id, 'с текстом:', ctx.message.text);
+  
   // Проверяем, является ли сообщение командой (начинается с '/')
   if (isCommand(ctx.message.text)) {
+    console.log('Это сообщение распознано как команда');
     // Это команда, её обработает соответствующий обработчик
     return;
   }
   
-  // В групповом чате полностью игнорируем сообщения без команд
-  if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
-    return; // Просто выходим без ответа
-  }
-  
-  // В личных чатах можем обрабатывать сообщения на основе состояния
   const userId = ctx.from.id;
   const userState = getUserState(userId);
+  console.log('Текущее состояние пользователя:', userState);
   
   // Если пользователь в режиме ожидания выбора, пробуем обработать сообщение как номер песни
   if (userState.state === STATES.AWAITING_SELECTION) {
+    console.log('Пользователь в режиме ожидания выбора песни');
     const songIndex = parseInt(ctx.message.text) - 1; // Пользователь вводит номер с 1, а не с 0
     
     if (!isNaN(songIndex) && songIndex >= 0 && songIndex < userState.data.matchedSongs.length) {
@@ -482,18 +486,29 @@ bot.on('text', async (ctx) => {
   }
   
   // Если пользователь в режиме ожидания поискового запроса, выполняем поиск
+  // Это работает как в личных чатах, так и в групповых
   if (userState.state === STATES.AWAITING_SEARCH_QUERY) {
+    console.log('Пользователь в режиме ожидания поискового запроса. Выполняем поиск для:', ctx.message.text);
     // Выполняем поиск по запросу
     await performSearch(ctx, ctx.message.text);
     return;
   }
   
-  // В личном чате даем подсказку
+  // Дальше обрабатываем только личные чаты
+  if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
+    console.log('Игнорируем сообщение в групповом чате, так как нет активного ожидания');
+    return; // В групповых чатах игнорируем все остальные сообщения
+  }
+  
+  // В личных чатах даем подсказку
+  console.log('Отправляем подсказку в личном чате');
   await ctx.reply('Используйте /search для поиска песен.');
 });
 
 // Функция поиска песни
 async function performSearch(ctx, query) {
+  console.log('Запуск функции поиска с запросом:', query);
+  
   const animation = await animateLoading(
     ctx, 
     `🔍 Ищу песню "${query}"... ⏳`, 
@@ -502,7 +517,10 @@ async function performSearch(ctx, query) {
   
   try {
     const songs = await getSongs();
+    console.log(`Получено ${songs ? songs.length : 0} песен из базы данных`);
+    
     if (!songs || songs.length === 0) {
+      console.log('Песни не найдены в базе данных');
       if (animation.messageId) {
         try {
           await ctx.telegram.editMessageText(
@@ -527,6 +545,14 @@ async function performSearch(ctx, query) {
       song.fullText.toLowerCase().includes(query.toLowerCase())
     );
     
+    console.log(`Найдено ${matchedSongs.length} песен по запросу "${query}"`);
+    if (matchedSongs.length > 0) {
+      // Для отладки выводим названия найденных песен
+      matchedSongs.forEach((song, index) => {
+        console.log(`Песня ${index + 1}: ${song.title}`);
+      });
+    }
+    
     // Останавливаем анимацию
     await animation.stop();
     
@@ -540,9 +566,11 @@ async function performSearch(ctx, query) {
     }
     
     if (matchedSongs.length === 0) {
+      console.log(`Песня "${query}" не найдена.`);
       await ctx.reply(`❌ Песня "${query}" не найдена.`);
     } else if (matchedSongs.length === 1) {
       // Если нашли одну песню, отправляем её с HTML-форматированием
+      console.log(`Отправляем единственную найденную песню: ${matchedSongs[0].title}`);
       await ctx.reply(`🎵 Найдена песня:\n\n${formatSongForDisplay(matchedSongs[0])}`, {
         parse_mode: 'HTML'
       });
@@ -555,6 +583,7 @@ async function performSearch(ctx, query) {
       
     } else if (matchedSongs.length <= 10) {
       // Если нашли несколько песен, показываем список с кнопками
+      console.log(`Отправляем список из ${matchedSongs.length} песен с кнопками выбора`);
       let message = `🎵 Найдено ${matchedSongs.length} песен с "${query}":\n\n`;
       
       matchedSongs.forEach((song, index) => {
@@ -683,11 +712,37 @@ function highlightChords(text) {
 // Получение и обработка песен из Google Docs
 async function getSongs() {
   try {
+    console.log('Вызвана функция getSongs');
+    
     // Проверяем кэш
     const now = Date.now();
     if (cache.songs.length > 0 && cache.lastUpdate && (now - cache.lastUpdate < cache.updateInterval)) {
+      console.log(`Возвращаем кешированные песни (${cache.songs.length} шт.)`);
+      
+      // Вывод информации о нескольких первых песнях для отладки
+      if (cache.songs.length > 0) {
+        console.log('Примеры песен из кеша:');
+        for (let i = 0; i < Math.min(3, cache.songs.length); i++) {
+          console.log(`${i + 1}. ${cache.songs[i].title}`);
+        }
+        
+        // Проверим, есть ли песня "Парус" в кеше
+        const parusSong = cache.songs.find(song => 
+          song.title.toLowerCase().includes('парус') || 
+          song.fullText.toLowerCase().includes('парус')
+        );
+        
+        if (parusSong) {
+          console.log('Песня "Парус" найдена в кеше:', parusSong.title);
+        } else {
+          console.log('Песня "Парус" НЕ найдена в кеше!');
+        }
+      }
+      
       return cache.songs;
     }
+    
+    console.log('Кеш устарел, загружаем документ заново');
     
     // Получаем содержимое документа
     const document = await getDocumentContent();
@@ -699,6 +754,8 @@ async function getSongs() {
     const songs = [];
     let currentSong = null;
     let nextLineIsAuthor = false;
+    
+    console.log(`Начинаем обработку документа, элементов: ${document.body.content.length}`);
     
     // Обрабатываем содержимое документа
     for (const element of document.body.content) {
@@ -715,6 +772,8 @@ async function getSongs() {
           const cleanTitle = text.replace('♭', '').trim();
           currentSong = { title: cleanTitle, author: '', fullText: text };
           nextLineIsAuthor = true;
+          
+          console.log(`Найдена новая песня: ${cleanTitle}`);
         } 
         else if (currentSong && nextLineIsAuthor) {
           // Эта строка - автор
@@ -734,22 +793,46 @@ async function getSongs() {
       songs.push(currentSong);
     }
     
+    console.log(`Найдено ${songs.length} песен в документе`);
+    
     // Фильтруем песни и обновляем кэш
     const filteredSongs = songs.filter(song => song.title && song.title.trim().length > 2);
+    console.log(`После фильтрации осталось ${filteredSongs.length} песен`);
     
     if (filteredSongs.length > 0) {
+      // Вывод информации о нескольких первых песнях для отладки
+      console.log('Примеры найденных песен:');
+      for (let i = 0; i < Math.min(3, filteredSongs.length); i++) {
+        console.log(`${i + 1}. ${filteredSongs[i].title}`);
+      }
+      
+      // Проверим, есть ли песня "Парус" в найденных песнях
+      const parusSong = filteredSongs.find(song => 
+        song.title.toLowerCase().includes('парус') || 
+        song.fullText.toLowerCase().includes('парус')
+      );
+      
+      if (parusSong) {
+        console.log('Песня "Парус" найдена:', parusSong.title);
+      } else {
+        console.log('Песня "Парус" НЕ найдена!');
+      }
+      
       cache.songs = filteredSongs;
       cache.lastUpdate = now;
       return filteredSongs;
     }
     
+    console.log('Не найдено подходящих песен после фильтрации');
     return [];
   } catch (error) {
     console.error('Ошибка при получении песен:', error);
     // Если в кэше есть песни, возвращаем их даже если кэш устарел
     if (cache.songs.length > 0) {
+      console.log(`Возвращаем кешированные песни после ошибки (${cache.songs.length} шт.)`);
       return cache.songs;
     }
+    console.log('Кеш пуст, возвращаем пустой массив');
     return [];
   }
 }
