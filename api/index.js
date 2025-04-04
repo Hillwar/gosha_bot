@@ -409,7 +409,7 @@ function formatSongForDisplay(song) {
   const lines = song.fullText.split('\n');
   
   // Строим новый текст с красивым форматированием
-  let formattedText = '🎵 ';
+  let formattedText = '🎸 ';
   let titleFound = false;
   let authorFound = false;
   
@@ -420,7 +420,7 @@ function formatSongForDisplay(song) {
     // Обрабатываем строку с названием (содержит символ ♭)
     if (!titleFound && line.includes('♭')) {
       // Добавляем название без символа ♭ с красивым оформлением
-      formattedText += `Песня: ${line.replace('♭', '').trim()}\n`;
+      formattedText += `${line.replace('♭', '').trim()}\n`;
       titleFound = true;
       continue;
     }
@@ -429,9 +429,8 @@ function formatSongForDisplay(song) {
     if (titleFound && !authorFound) {
       const author = line.trim();
       if (author) {
-        formattedText += `👤 : ${author}\n`;
+        formattedText += `👤 ${author}\n`;
       }
-      formattedText += '\n' + '┈'.repeat(30);
       authorFound = true;
       continue;
     }
@@ -460,9 +459,6 @@ function formatSongForDisplay(song) {
       }
     }
   }
-  
-  // Добавляем декоративный элемент в конце
-  formattedText += '┈'.repeat(30);
   
   return formattedText;
 }
