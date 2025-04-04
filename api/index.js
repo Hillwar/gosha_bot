@@ -92,17 +92,25 @@ function getUserState(userId) {
   const userState = userStates[userId];
   console.log(`Получение состояния для пользователя ${userId}:`, userState);
   if (!userState || Date.now() - userState.timestamp > 10 * 60 * 1000) {
-    return { state: STATES.DEFAULT, data: {} };
+    return { state: STATES.DEFAULT, data: {}, timestamp: 0 };
   }
   return userState;
 }
 
 // Функция для установки состояния пользователя
 function setUserState(userId, state, data = {}) {
+  // Если устанавливаем DEFAULT, просто удаляем запись
+  if (state === STATES.DEFAULT) {
+    console.log(`Удаляем состояние для пользователя ${userId}`);
+    delete userStates[userId];
+    return;
+  }
+  
+  // Иначе устанавливаем новое состояние
   userStates[userId] = {
     state,
     timestamp: Date.now(),
-    data
+    data: { ...data }
   };
   console.log(`Установлено состояние для пользователя ${userId}:`, state, data);
 }
@@ -147,9 +155,6 @@ bot.command('help', (ctx) => {
 bot.command('search', async (ctx) => {
   console.log('Вызвана команда /search в чате:', ctx.chat.type, 'пользователем:', ctx.from.id);
   
-  // Устанавливаем состояние ожидания поискового запроса
-  setUserState(ctx.from.id, STATES.AWAITING_SEARCH_QUERY);
-  
   // Очищаем текст от команды и упоминания бота
   const query = cleanCommandText(ctx.message.text, 'search');
   console.log('Очищенный запрос из команды /search:', query);
@@ -158,6 +163,12 @@ bot.command('search', async (ctx) => {
     // Если запрос уже есть в команде, выполняем поиск сразу
     await performSearch(ctx, query);
   } else {
+    // Устанавливаем состояние ожидания поискового запроса ТОЛЬКО если запрос не указан в команде
+    setUserState(ctx.from.id, STATES.AWAITING_SEARCH_QUERY, {
+      chatId: ctx.chat.id,
+      timestamp: Date.now()
+    });
+    
     // Иначе просим ввести запрос
     await ctx.reply('Введите название песни или часть её текста в следующем сообщении');
   }
@@ -401,7 +412,7 @@ bot.on('callback_query', async (ctx) => {
       // Уведомляем Telegram о том, что мы обработали callback_query
       await ctx.answerCbQuery();
       
-      // Сбрасываем состояние пользователя (больше не ждем выбора)
+      // Очищаем состояние пользователя (больше не ждем выбора)
       setUserState(ctx.from.id, STATES.DEFAULT);
       
       // Получаем песни из кеша или загружаем заново
@@ -456,13 +467,28 @@ bot.on('text', async (ctx) => {
   const userState = getUserState(userId);
   console.log('Текущее состояние пользователя:', userState);
   
+  // Проверим, что состояние не устарело
+  const currentTimestamp = Date.now();
+  const stateDuration = userState.data.timestamp ? currentTimestamp - userState.data.timestamp : 0;
+  console.log(`Время с момента установки состояния: ${stateDuration}мс`);
+  
   // Если пользователь в режиме ожидания выбора, пробуем обработать сообщение как номер песни
   if (userState.state === STATES.AWAITING_SELECTION) {
     console.log('Пользователь в режиме ожидания выбора песни');
-    const songIndex = parseInt(ctx.message.text) - 1; // Пользователь вводит номер с 1, а не с 0
     
-    if (!isNaN(songIndex) && songIndex >= 0 && songIndex < userState.data.matchedSongs.length) {
-      // Сбрасываем состояние пользователя
+    // Проверяем, что сообщение поступило в тот же чат, где была команда /search
+    if (userState.data.chatId && userState.data.chatId !== ctx.chat.id) {
+      console.log('Чат сообщения не совпадает с чатом выбора песни');
+      return; // Игнорируем сообщения в других чатах
+    }
+    
+    // Пробуем извлечь номер песни из текста
+    let songIndex = parseInt(ctx.message.text.trim()) - 1; // Пользователь вводит номер с 1, а не с 0
+    
+    console.log(`Извлечен номер песни: ${songIndex + 1}, всего песен: ${userState.data.matchedSongs ? userState.data.matchedSongs.length : 0}`);
+    
+    if (!isNaN(songIndex) && songIndex >= 0 && userState.data.matchedSongs && songIndex < userState.data.matchedSongs.length) {
+      // Сбрасываем состояние пользователя перед тем, как отправить ответ
       setUserState(userId, STATES.DEFAULT);
       
       // Отправляем выбранную песню
@@ -477,12 +503,13 @@ bot.on('text', async (ctx) => {
       });
       
       return;
+    } else {
+      // Если это не номер песни или некорректный номер, сбрасываем состояние и сообщаем об ошибке
+      console.log('Введен некорректный номер песни, сбрасываем состояние');
+      setUserState(userId, STATES.DEFAULT);
+      await ctx.reply('❌ Неверный номер песни. Поиск отменен. Используйте /search для нового поиска.');
+      return;
     }
-    // Если это не номер песни, не выполняем новый поиск
-    // Просто сбрасываем состояние
-    setUserState(userId, STATES.DEFAULT);
-    await ctx.reply('❌ Неверный номер песни. Поиск отменен. Используйте /search для нового поиска.');
-    return;
   }
   
   // Если пользователь в режиме ожидания поискового запроса, выполняем поиск
@@ -490,7 +517,14 @@ bot.on('text', async (ctx) => {
   if (userState.state === STATES.AWAITING_SEARCH_QUERY) {
     console.log('Пользователь в режиме ожидания поискового запроса. Выполняем поиск для:', ctx.message.text);
     
-    // Сбрасываем состояние перед выполнением поиска, чтобы избежать повторной обработки
+    // Проверяем, что сообщение поступило в тот же чат, где была команда /search
+    if (userState.data.chatId && userState.data.chatId !== ctx.chat.id) {
+      console.log('Чат сообщения не совпадает с чатом команды /search');
+      return; // Игнорируем сообщения в других чатах
+    }
+    
+    // ВАЖНО: Сначала удаляем состояние, потом выполняем поиск
+    // Это предотвратит повторную обработку этого же сообщения
     setUserState(userId, STATES.DEFAULT);
     
     // Выполняем поиск по запросу
@@ -617,7 +651,13 @@ async function performSearch(ctx, query) {
       });
       
       // Устанавливаем состояние пользователя - ожидание выбора песни
-      setUserState(ctx.from.id, STATES.AWAITING_SELECTION, { matchedSongs, query });
+      console.log(`Устанавливаем состояние ${STATES.AWAITING_SELECTION} для пользователя ${ctx.from.id}`);
+      setUserState(ctx.from.id, STATES.AWAITING_SELECTION, { 
+        matchedSongs, 
+        query,
+        chatId: ctx.chat.id, 
+        timestamp: Date.now() 
+      });
       
     } else {
       // Если нашли слишком много, просим уточнить
