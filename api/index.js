@@ -98,7 +98,7 @@ bot.command('help', (ctx) => {
 bot.command('search', async (ctx) => {
   const query = ctx.message.text.replace('/search', '').trim();
   if (!query) {
-    return ctx.reply('Напиши название песни для поиска');
+    return ctx.reply('Напиши название песни или часть текста для поиска');
   }
   await performSearch(ctx, query);
 });
