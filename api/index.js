@@ -159,7 +159,7 @@ bot.command('search', async (ctx) => {
     await performSearch(ctx, query);
   } else {
     // Иначе просим ввести запрос
-    await ctx.reply('Введите название песни или часть её текста в ответе на это сообщение');
+    await ctx.reply('Введите название песни или часть её текста в следующем сообщении (не обязательно отвечать на это сообщение)');
   }
 });
 
@@ -489,6 +489,10 @@ bot.on('text', async (ctx) => {
   // Это работает как в личных чатах, так и в групповых
   if (userState.state === STATES.AWAITING_SEARCH_QUERY) {
     console.log('Пользователь в режиме ожидания поискового запроса. Выполняем поиск для:', ctx.message.text);
+    
+    // Сбрасываем состояние перед выполнением поиска, чтобы избежать повторной обработки
+    setUserState(userId, STATES.DEFAULT);
+    
     // Выполняем поиск по запросу
     await performSearch(ctx, ctx.message.text);
     return;
