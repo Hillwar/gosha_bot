@@ -169,10 +169,8 @@ bot.command('search', async (ctx) => {
       timestamp: Date.now()
     });
     
-    // Иначе просим ввести запрос с понятной инструкцией, что нужен reply
-    await ctx.reply('⬇️ Ответьте на это сообщение, указав название песни или часть её текста', {
-      reply_to_message_id: ctx.message.message_id
-    });
+    // Иначе просим ввести запрос
+    await ctx.reply('Введите название песни или часть её текста в следующем сообщении');
   }
 });
 
@@ -404,6 +402,22 @@ bot.on('callback_query', async (ctx) => {
   try {
     const callbackData = ctx.callbackQuery.data;
     
+    // Обработка кнопки "Искать другую песню"
+    if (callbackData === "new_search") {
+      // Уведомляем Telegram о том, что мы обработали callback_query
+      await ctx.answerCbQuery();
+      
+      // Устанавливаем состояние ожидания поискового запроса
+      setUserState(ctx.from.id, STATES.AWAITING_SEARCH_QUERY, {
+        chatId: ctx.chat.id,
+        timestamp: Date.now()
+      });
+      
+      // Просим ввести новый поисковый запрос
+      await ctx.reply('Введите название песни или часть её текста');
+      return;
+    }
+    
     // Проверяем, что callbackData соответствует формату выбора песни
     if (callbackData.startsWith('song_')) {
       // Формат: song_INDEX_QUERY
@@ -509,7 +523,13 @@ bot.on('text', async (ctx) => {
       // Если это не номер песни или некорректный номер, сбрасываем состояние и сообщаем об ошибке
       console.log('Введен некорректный номер песни, сбрасываем состояние');
       setUserState(userId, STATES.DEFAULT);
-      await ctx.reply('❌ Неверный номер песни. Поиск отменен. Используйте /search для нового поиска.');
+      await ctx.reply('❌ Неверный номер песни. Поиск отменен.', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Искать другую песню", callback_data: "new_search" }]
+          ]
+        }
+      });
       return;
     }
   }
@@ -523,12 +543,6 @@ bot.on('text', async (ctx) => {
     if (userState.data.chatId && userState.data.chatId !== ctx.chat.id) {
       console.log('Чат сообщения не совпадает с чатом команды /search');
       return; // Игнорируем сообщения в других чатах
-    }
-    
-    // Проверяем, что сообщение является ответом на другое сообщение
-    if (!ctx.message.reply_to_message) {
-      console.log('Сообщение не является ответом на другое сообщение');
-      return; // Игнорируем не-ответы
     }
     
     // ВАЖНО: Сначала удаляем состояние, потом выполняем поиск
@@ -613,7 +627,14 @@ async function performSearch(ctx, query) {
     
     if (matchedSongs.length === 0) {
       console.log(`Песня "${query}" не найдена.`);
-      await ctx.reply(`❌ Песня "${query}" не найдена.`);
+      // Добавляем возможность продолжить поиск
+      await ctx.reply(`❌ Песня "${query}" не найдена. Хотите поискать другую песню?`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Искать другую песню", callback_data: "new_search" }]
+          ]
+        }
+      });
     } else if (matchedSongs.length === 1) {
       // Если нашли одну песню, отправляем её с HTML-форматированием
       console.log(`Отправляем единственную найденную песню: ${matchedSongs[0].title}`);
@@ -669,7 +690,13 @@ async function performSearch(ctx, query) {
       
     } else {
       // Если нашли слишком много, просим уточнить
-      await ctx.reply(`⚠️ Найдено слишком много песен (${matchedSongs.length}). Пожалуйста, уточните запрос.`);
+      await ctx.reply(`⚠️ Найдено слишком много песен (${matchedSongs.length}). Пожалуйста, уточните запрос.`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Искать другую песню", callback_data: "new_search" }]
+          ]
+        }
+      });
     }
   } catch (error) {
     console.error('Ошибка при поиске песни:', error);
