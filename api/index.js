@@ -16,6 +16,15 @@ const cache = {
   updateInterval: 30 * 60 * 1000 // 30 минут
 };
 
+// Хранение состояний пользователей
+const userStates = {};
+
+// Константы для состояний
+const STATES = {
+  DEFAULT: 'default',        // Обычный режим - обрабатывать сообщения как поиск
+  AWAITING_SELECTION: 'awaiting_selection'  // Ожидание выбора песни
+};
+
 // Добавляем набор анимированных сообщений о загрузке
 const loadingAnimations = [
   "🔍 Ищу... ⏳",
@@ -76,13 +85,36 @@ async function animateLoading(ctx, initialMessage, animationTexts, duration = 50
   }
 }
 
+// Функция для установки состояния пользователя
+function setUserState(userId, state, data = {}) {
+  userStates[userId] = {
+    state,
+    timestamp: Date.now(),
+    data
+  };
+}
+
+// Функция для получения состояния пользователя
+function getUserState(userId) {
+  // Если состояние не установлено или устарело (более 10 минут), возвращаем DEFAULT
+  const userState = userStates[userId];
+  if (!userState || Date.now() - userState.timestamp > 10 * 60 * 1000) {
+    return { state: STATES.DEFAULT, data: {} };
+  }
+  return userState;
+}
+
 // Команда /start
 bot.command('start', (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
   ctx.reply('Привет! Я бот для поиска песен в аккорднике. Используй /help для списка команд.');
 });
 
 // Команда /help
 bot.command('help', (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
   ctx.reply(
     'Доступные команды:\n' +
     '/start - Приветствие и запуск бота\n' +
@@ -96,6 +128,9 @@ bot.command('help', (ctx) => {
 
 // Команда /search
 bot.command('search', async (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
+  
   const query = ctx.message.text.replace('/search', '').trim();
   if (!query) {
     return ctx.reply('Напиши название песни или часть текста для поиска');
@@ -105,6 +140,9 @@ bot.command('search', async (ctx) => {
 
 // Команда /list
 bot.command('list', async (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
+  
   const animation = await animateLoading(
     ctx, 
     "🔍 Загружаю список песен... ⏳", 
@@ -183,6 +221,9 @@ bot.command('list', async (ctx) => {
 
 // Команда /random
 bot.command('random', async (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
+  
   const animation = await animateLoading(
     ctx, 
     "🎲 Выбираю случайную песню... ⏳", 
@@ -257,6 +298,9 @@ bot.command('random', async (ctx) => {
 
 // Команда /circlerules
 bot.command('circlerules', async (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
+  
   const animation = await animateLoading(
     ctx, 
     "📜 Загружаю правила орлятского круга... ⏳", 
@@ -305,12 +349,6 @@ bot.command('circlerules', async (ctx) => {
   }
 });
 
-// Обработка текстовых сообщений (поиск без команды)
-bot.on('text', async (ctx) => {
-  if (ctx.message.text.startsWith('/')) return; // Пропускаем команды
-  await performSearch(ctx, ctx.message.text);
-});
-
 // Обработка callback_query для выбора песни
 bot.on('callback_query', async (ctx) => {
   try {
@@ -325,6 +363,9 @@ bot.on('callback_query', async (ctx) => {
       
       // Уведомляем Telegram о том, что мы обработали callback_query
       await ctx.answerCbQuery();
+      
+      // Сбрасываем состояние пользователя (больше не ждем выбора)
+      setUserState(ctx.from.id, STATES.DEFAULT);
       
       // Получаем песни из кеша или загружаем заново
       const songs = await getSongs();
@@ -356,6 +397,42 @@ bot.on('callback_query', async (ctx) => {
     console.error('Ошибка при обработке выбора песни:', error);
     await ctx.reply('❌ Произошла ошибка при выборе песни. Попробуйте снова.');
   }
+});
+
+// Обработка текстовых сообщений
+bot.on('text', async (ctx) => {
+  if (ctx.message.text.startsWith('/')) return; // Пропускаем команды
+  
+  const userId = ctx.from.id;
+  const userState = getUserState(userId);
+  
+  // Если пользователь в режиме ожидания выбора, пробуем обработать сообщение как номер песни
+  if (userState.state === STATES.AWAITING_SELECTION) {
+    const songIndex = parseInt(ctx.message.text) - 1; // Пользователь вводит номер с 1, а не с 0
+    
+    if (!isNaN(songIndex) && songIndex >= 0 && songIndex < userState.data.matchedSongs.length) {
+      // Сбрасываем состояние пользователя
+      setUserState(userId, STATES.DEFAULT);
+      
+      // Отправляем выбранную песню
+      await ctx.reply(`🎵 Выбрана песня:\n\n${formatSongForDisplay(userState.data.matchedSongs[songIndex])}`, {
+        parse_mode: 'HTML'
+      });
+      
+      // Отправляем ссылку на аккордник
+      await ctx.reply(`<a href="${process.env.SONGBOOK_URL}">Открыть аккордник</a>`, { 
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      });
+      
+      return;
+    }
+    // Если это не номер песни, выполняем новый поиск
+  }
+  
+  // Если пользователь в обычном режиме или ввел не число в режиме выбора,
+  // выполняем поиск песни
+  await performSearch(ctx, ctx.message.text);
 });
 
 // Функция поиска песни
@@ -448,6 +525,10 @@ async function performSearch(ctx, query) {
           inline_keyboard: inlineKeyboard
         }
       });
+      
+      // Устанавливаем состояние пользователя - ожидание выбора песни
+      setUserState(ctx.from.id, STATES.AWAITING_SELECTION, { matchedSongs, query });
+      
     } else {
       // Если нашли слишком много, просим уточнить
       await ctx.reply(`⚠️ Найдено слишком много песен (${matchedSongs.length}). Пожалуйста, уточните запрос.`);
