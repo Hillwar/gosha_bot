@@ -321,7 +321,7 @@ function formatSongForDisplay(song) {
     // Обрабатываем строку с названием (содержит символ ♭)
     if (!titleFound && line.includes('♭')) {
       // Добавляем название без символа ♭ с красивым оформлением
-      formattedText += `𝗣𝗲𝘀𝗻𝘆𝗮: ${line.replace('♭', '').trim()}\n`;
+      formattedText += `Песня: ${line.replace('♭', '').trim()}\n`;
       titleFound = true;
       continue;
     }
@@ -330,7 +330,7 @@ function formatSongForDisplay(song) {
     if (titleFound && !authorFound) {
       const author = line.trim();
       if (author) {
-        formattedText += `👤 𝗔𝘂𝘁𝗼𝗿: ${author}\n`;
+        formattedText += `👤 : ${author}\n`;
       }
       formattedText += '\n' + '┈'.repeat(30) + '\n\n';
       authorFound = true;
@@ -348,15 +348,33 @@ function formatSongForDisplay(song) {
         line.toLowerCase().includes('бридж') ||
         line.toLowerCase().includes('bridge');
       
+      // Проверяем, содержит ли строка только аккорды
+      const isChordLine = /^[A-G][#bm\d+\-/\s()]*$/i.test(line.trim()) && line.trim().length > 0;
+      
       if (isHeader) {
         // Если это заголовок, выделяем его
         formattedText += `🎼 ${line.toUpperCase().trim()} 🎼\n`;
-      } else if (line.trim()) {
-        // Обычная строка с текстом
-        formattedText += line + '\n';
+      } else if (isChordLine) {
+        // Если строка содержит только аккорды, выделяем ее
+        formattedText += `🎸 ${line.trim()} 🎸\n`;
       } else {
-        // Пустая строка
-        formattedText += '\n';
+        // Обычный текст - ищем и выделяем аккорды внутри строки
+        let processedLine = line;
+        
+        // Регулярное выражение для поиска аккордов в тексте
+        // Ищем: заглавную букву A-G, возможно с # или b, затем возможные дополнения (m, 7, maj и т.д.)
+        const chordRegex = /\b([A-G][#b]?(?:m|min|maj|dim|sus|aug|add|7|9|11|13|6|5)?\d*(?:\/[A-G][#b]?)?)\b/g;
+        
+        // Заменяем найденные аккорды на выделенные
+        processedLine = processedLine.replace(chordRegex, '`$1`');
+        
+        if (line.trim()) {
+          // Обычная строка с текстом
+          formattedText += processedLine + '\n';
+        } else {
+          // Пустая строка
+          formattedText += '\n';
+        }
       }
     }
   }
