@@ -26,30 +26,53 @@ const loadingAnimations = [
 // Вспомогательная функция для анимации загрузки
 async function animateLoading(ctx, initialMessage, animationTexts, duration = 5000) {
   let currentIndex = 0;
-  const loadingMsg = await ctx.reply(initialMessage || animationTexts[0]);
+  let loadingMsg;
   
-  const intervalId = setInterval(async () => {
-    currentIndex = (currentIndex + 1) % animationTexts.length;
-    try {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id, 
-        loadingMsg.message_id, 
-        null, 
-        animationTexts[currentIndex]
-      );
-    } catch (e) {
-      // Игнорируем ошибки при обновлении сообщения
-    }
-  }, 500);
-  
-  // Возвращаем функцию для остановки анимации и ID сообщения
-  return {
-    stop: async () => {
-      clearInterval(intervalId);
-      return loadingMsg.message_id;
-    },
-    messageId: loadingMsg.message_id
-  };
+  try {
+    // Отправляем начальное сообщение
+    loadingMsg = await ctx.reply(initialMessage || animationTexts[0]);
+    
+    // Запоминаем ID сообщения и ID чата для безопасного доступа
+    const messageId = loadingMsg.message_id;
+    const chatId = ctx.chat.id;
+    
+    const intervalId = setInterval(async () => {
+      currentIndex = (currentIndex + 1) % animationTexts.length;
+      try {
+        // Проверяем, что у нас есть все необходимые данные
+        if (chatId && messageId) {
+          await ctx.telegram.editMessageText(
+            chatId, 
+            messageId, 
+            null, 
+            animationTexts[currentIndex]
+          );
+        }
+      } catch (e) {
+        // Игнорируем ошибки при обновлении сообщения
+        console.log('Ошибка при обновлении сообщения анимации:', e.message);
+        clearInterval(intervalId); // Останавливаем интервал при ошибке
+      }
+    }, 500);
+    
+    // Возвращаем функцию для остановки анимации и ID сообщения
+    return {
+      stop: async () => {
+        clearInterval(intervalId);
+        return loadingMsg ? loadingMsg.message_id : null;
+      },
+      messageId: loadingMsg ? loadingMsg.message_id : null,
+      chatId: ctx.chat.id
+    };
+  } catch (error) {
+    console.error('Ошибка при создании сообщения загрузки:', error);
+    // Возвращаем null значения, чтобы избежать ошибок при дальнейшем использовании
+    return {
+      stop: async () => null,
+      messageId: null,
+      chatId: ctx.chat.id
+    };
+  }
 }
 
 // Команда /start
@@ -90,18 +113,35 @@ bot.command('list', async (ctx) => {
   try {
     const songs = await getSongs();
     if (!songs || songs.length === 0) {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id, 
-        animation.messageId, 
-        null, 
-        "❌ Не удалось загрузить песни. Попробуйте позже."
-      );
+      if (animation.messageId) {
+        try {
+          await ctx.telegram.editMessageText(
+            animation.chatId, 
+            animation.messageId, 
+            null, 
+            "❌ Не удалось загрузить песни. Попробуйте позже."
+          );
+        } catch (e) {
+          // Если не удалось отредактировать, отправляем новое сообщение
+          await ctx.reply("❌ Не удалось загрузить песни. Попробуйте позже.");
+        }
+      } else {
+        await ctx.reply("❌ Не удалось загрузить песни. Попробуйте позже.");
+      }
       return;
     }
     
-    // Останавливаем анимацию и удаляем сообщение о загрузке
+    // Останавливаем анимацию
     await animation.stop();
-    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
+    
+    // Пытаемся удалить сообщение о загрузке
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.deleteMessage(animation.chatId, animation.messageId);
+      }
+    } catch (e) {
+      console.log('Не удалось удалить сообщение загрузки:', e.message);
+    }
     
     // Формируем и отправляем список песен
     let message = 'Список песен в аккорднике 📖:\n\n';
@@ -121,12 +161,22 @@ bot.command('list', async (ctx) => {
     
   } catch (error) {
     console.error('Ошибка при получении списка песен:', error);
-    await ctx.telegram.editMessageText(
-      ctx.chat.id, 
-      animation.messageId, 
-      null, 
-      "❌ Произошла ошибка. Попробуйте позже."
-    );
+    
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.editMessageText(
+          animation.chatId, 
+          animation.messageId, 
+          null, 
+          "❌ Произошла ошибка. Попробуйте позже."
+        );
+      } else {
+        await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+      }
+    } catch (e) {
+      // Если не удалось отредактировать, отправляем новое сообщение
+      await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+    }
   }
 });
 
@@ -141,18 +191,34 @@ bot.command('random', async (ctx) => {
   try {
     const songs = await getSongs();
     if (!songs || songs.length === 0) {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id, 
-        animation.messageId, 
-        null, 
-        "❌ Не удалось загрузить песни. Попробуйте позже."
-      );
+      if (animation.messageId) {
+        try {
+          await ctx.telegram.editMessageText(
+            animation.chatId, 
+            animation.messageId, 
+            null, 
+            "❌ Не удалось загрузить песни. Попробуйте позже."
+          );
+        } catch (e) {
+          await ctx.reply("❌ Не удалось загрузить песни. Попробуйте позже.");
+        }
+      } else {
+        await ctx.reply("❌ Не удалось загрузить песни. Попробуйте позже.");
+      }
       return;
     }
     
-    // Останавливаем анимацию и удаляем сообщение о загрузке
+    // Останавливаем анимацию
     await animation.stop();
-    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
+    
+    // Пытаемся удалить сообщение о загрузке
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.deleteMessage(animation.chatId, animation.messageId);
+      }
+    } catch (e) {
+      console.log('Не удалось удалить сообщение загрузки:', e.message);
+    }
     
     // Выбираем случайную песню
     const randomIndex = Math.floor(Math.random() * songs.length);
@@ -171,12 +237,20 @@ bot.command('random', async (ctx) => {
     
   } catch (error) {
     console.error('Ошибка при получении случайной песни:', error);
-    await ctx.telegram.editMessageText(
-      ctx.chat.id, 
-      animation.messageId, 
-      null, 
-      "❌ Произошла ошибка. Попробуйте позже."
-    );
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.editMessageText(
+          animation.chatId, 
+          animation.messageId, 
+          null, 
+          "❌ Произошла ошибка. Попробуйте позже."
+        );
+      } else {
+        await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+      }
+    } catch (e) {
+      await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+    }
   }
 });
 
@@ -212,9 +286,17 @@ bot.command('circlerules', async (ctx) => {
       }
     }
     
-    // Останавливаем анимацию и удаляем сообщение о загрузке
+    // Останавливаем анимацию
     await animation.stop();
-    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
+    
+    // Пытаемся удалить сообщение о загрузке
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.deleteMessage(animation.chatId, animation.messageId);
+      }
+    } catch (e) {
+      console.log('Не удалось удалить сообщение загрузки:', e.message);
+    }
     
     if (!foundSongStart || rules.trim().length === 0) {
       await ctx.reply('❌ Не удалось найти правила орлятского круга в документе.');
@@ -225,12 +307,20 @@ bot.command('circlerules', async (ctx) => {
     
   } catch (error) {
     console.error('Ошибка при получении правил:', error);
-    await ctx.telegram.editMessageText(
-      ctx.chat.id, 
-      animation.messageId, 
-      null, 
-      "❌ Произошла ошибка. Попробуйте позже."
-    );
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.editMessageText(
+          animation.chatId, 
+          animation.messageId, 
+          null, 
+          "❌ Произошла ошибка. Попробуйте позже."
+        );
+      } else {
+        await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+      }
+    } catch (e) {
+      await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+    }
   }
 });
 
@@ -251,12 +341,20 @@ async function performSearch(ctx, query) {
   try {
     const songs = await getSongs();
     if (!songs || songs.length === 0) {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id, 
-        animation.messageId, 
-        null, 
-        "❌ Не удалось загрузить песни. Попробуйте позже."
-      );
+      if (animation.messageId) {
+        try {
+          await ctx.telegram.editMessageText(
+            animation.chatId, 
+            animation.messageId, 
+            null, 
+            "❌ Не удалось загрузить песни. Попробуйте позже."
+          );
+        } catch (e) {
+          await ctx.reply("❌ Не удалось загрузить песни. Попробуйте позже.");
+        }
+      } else {
+        await ctx.reply("❌ Не удалось загрузить песни. Попробуйте позже.");
+      }
       return;
     }
     
@@ -267,9 +365,17 @@ async function performSearch(ctx, query) {
       song.fullText.toLowerCase().includes(query.toLowerCase())
     );
     
-    // Останавливаем анимацию и удаляем сообщение о загрузке
+    // Останавливаем анимацию
     await animation.stop();
-    await ctx.telegram.deleteMessage(ctx.chat.id, animation.messageId);
+    
+    // Пытаемся удалить сообщение о загрузке
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.deleteMessage(animation.chatId, animation.messageId);
+      }
+    } catch (e) {
+      console.log('Не удалось удалить сообщение загрузки:', e.message);
+    }
     
     if (matchedSongs.length === 0) {
       await ctx.reply(`❌ Песня "${query}" не найдена.`);
@@ -299,12 +405,20 @@ async function performSearch(ctx, query) {
     }
   } catch (error) {
     console.error('Ошибка при поиске песни:', error);
-    await ctx.telegram.editMessageText(
-      ctx.chat.id, 
-      animation.messageId, 
-      null, 
-      "❌ Произошла ошибка при поиске песни. Попробуйте позже."
-    );
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.editMessageText(
+          animation.chatId, 
+          animation.messageId, 
+          null, 
+          "❌ Произошла ошибка при поиске песни. Попробуйте позже."
+        );
+      } else {
+        await ctx.reply("❌ Произошла ошибка при поиске песни. Попробуйте позже.");
+      }
+    } catch (e) {
+      await ctx.reply("❌ Произошла ошибка при поиске песни. Попробуйте позже.");
+    }
   }
 }
 
