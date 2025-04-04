@@ -492,8 +492,9 @@ function highlightChords(text) {
   // Поиск сочетаний вида A, Am, C#, Dm7, G/B и т.д.
   const chordRegex = /\b([ACDEFGНB][#♯♭b]?(?:m|min|maj|sus|add|aug|dim)?(?:[2-9]|11|13)?(?:\/[ACDEFGНB][#♯♭b]?)?)(?=\s|$|\b)/g;
   
-  // Заменяем найденные аккорды на тег с красным цветом
-  return text.replace(chordRegex, '<span style="color: #FF0000;">$1</span>');
+  // Заменяем найденные аккорды на тег, поддерживаемый Telegram
+  // В Telegram HTML поддерживаются теги: b, i, u, s, a, code, pre
+  return text.replace(chordRegex, '<b><i>$1</i></b>');
 }
 
 // Получение и обработка песен из Google Docs
