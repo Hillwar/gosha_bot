@@ -309,8 +309,8 @@ function formatSongForDisplay(song) {
   // Разделяем текст песни на строки
   const lines = song.fullText.split('\n');
   
-  // Строим новый текст
-  let formattedText = '';
+  // Строим новый текст с красивым форматированием
+  let formattedText = '🎵 ';
   let titleFound = false;
   let authorFound = false;
   
@@ -320,25 +320,49 @@ function formatSongForDisplay(song) {
     
     // Обрабатываем строку с названием (содержит символ ♭)
     if (!titleFound && line.includes('♭')) {
-      // Добавляем название без символа ♭
-      formattedText += line.replace('♭', '').trim() + '\n';
+      // Добавляем название без символа ♭ с красивым оформлением
+      formattedText += `𝗣𝗲𝘀𝗻𝘆𝗮: ${line.replace('♭', '').trim()}\n`;
       titleFound = true;
       continue;
     }
     
     // Обрабатываем строку с автором (следующая после названия)
     if (titleFound && !authorFound) {
-      formattedText += line.trim() + '\n\n';
+      const author = line.trim();
+      if (author) {
+        formattedText += `👤 𝗔𝘂𝘁𝗼𝗿: ${author}\n`;
+      }
+      formattedText += '\n' + '┈'.repeat(30) + '\n\n';
       authorFound = true;
       continue;
     }
     
     // Добавляем все остальные строки как текст песни
     if (titleFound && authorFound) {
-      // Сохраняем все строки, включая пустые, чтобы сохранить форматирование
-      formattedText += line + '\n';
+      // Определяем, является ли строка заголовком (припев, куплет и т.д.)
+      const isHeader = 
+        line.toLowerCase().includes('припев') || 
+        line.toLowerCase().includes('куплет') ||
+        line.toLowerCase().includes('chorus') ||
+        line.toLowerCase().includes('verse') ||
+        line.toLowerCase().includes('бридж') ||
+        line.toLowerCase().includes('bridge');
+      
+      if (isHeader) {
+        // Если это заголовок, выделяем его
+        formattedText += `🎼 ${line.toUpperCase().trim()} 🎼\n`;
+      } else if (line.trim()) {
+        // Обычная строка с текстом
+        formattedText += line + '\n';
+      } else {
+        // Пустая строка
+        formattedText += '\n';
+      }
     }
   }
+  
+  // Добавляем декоративный элемент в конце
+  formattedText += '\n' + '┈'.repeat(30);
   
   return formattedText;
 }
@@ -382,12 +406,12 @@ async function getSongs() {
         else if (currentSong && nextLineIsAuthor) {
           // Эта строка - автор
           currentSong.author = text.trim();
-          currentSong.fullText += '\n' + text;
+          currentSong.fullText +=  text;
           nextLineIsAuthor = false;
         }
         else if (currentSong) {
           // Добавляем строку к тексту песни
-          currentSong.fullText += '\n' + text;
+          currentSong.fullText += text;
         }
       }
     }
