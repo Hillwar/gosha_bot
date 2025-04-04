@@ -159,7 +159,7 @@ bot.command('search', async (ctx) => {
     await performSearch(ctx, query);
   } else {
     // Иначе просим ввести запрос
-    await ctx.reply('Введите название песни в ответе на это сообщение');
+    await ctx.reply('Введите название песни или часть её текста в ответе на это сообщение');
   }
 });
 
