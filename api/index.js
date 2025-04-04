@@ -98,7 +98,7 @@ bot.command('help', (ctx) => {
 bot.command('search', async (ctx) => {
   const query = ctx.message.text.replace('/search', '').trim();
   if (!query) {
-    return ctx.reply('Напиши название песни для поиска. Например: /search Перемен');
+    return ctx.reply('Напиши название песни для поиска');
   }
   await performSearch(ctx, query);
 });
@@ -311,6 +311,53 @@ bot.on('text', async (ctx) => {
   await performSearch(ctx, ctx.message.text);
 });
 
+// Обработка callback_query для выбора песни
+bot.on('callback_query', async (ctx) => {
+  try {
+    const callbackData = ctx.callbackQuery.data;
+    
+    // Проверяем, что callbackData соответствует формату выбора песни
+    if (callbackData.startsWith('song_')) {
+      // Формат: song_INDEX_QUERY
+      const parts = callbackData.split('_');
+      const index = parseInt(parts[1]);
+      const query = parts.slice(2).join('_');
+      
+      // Уведомляем Telegram о том, что мы обработали callback_query
+      await ctx.answerCbQuery();
+      
+      // Получаем песни из кеша или загружаем заново
+      const songs = await getSongs();
+      
+      // Ищем песни по запросу
+      const matchedSongs = songs.filter(song => 
+        song.title.toLowerCase().includes(query.toLowerCase()) ||
+        (song.author && song.author.toLowerCase().includes(query.toLowerCase())) ||
+        song.fullText.toLowerCase().includes(query.toLowerCase())
+      );
+      
+      // Проверяем, что индекс валидный
+      if (index >= 0 && index < matchedSongs.length) {
+        // Отправляем выбранную песню
+        await ctx.reply(`🎵 Выбрана песня:\n\n${formatSongForDisplay(matchedSongs[index])}`, {
+          parse_mode: 'HTML'
+        });
+        
+        // Отправляем ссылку на аккордник
+        await ctx.reply(`<a href="${process.env.SONGBOOK_URL}">Открыть аккордник</a>`, { 
+          parse_mode: 'HTML',
+          disable_web_page_preview: true
+        });
+      } else {
+        await ctx.reply('❌ Не удалось найти выбранную песню. Попробуйте выполнить поиск заново.');
+      }
+    }
+  } catch (error) {
+    console.error('Ошибка при обработке выбора песни:', error);
+    await ctx.reply('❌ Произошла ошибка при выборе песни. Попробуйте снова.');
+  }
+});
+
 // Функция поиска песни
 async function performSearch(ctx, query) {
   const animation = await animateLoading(
@@ -373,13 +420,34 @@ async function performSearch(ctx, query) {
       });
       
     } else if (matchedSongs.length <= 10) {
-      // Если нашли несколько песен, показываем список
+      // Если нашли несколько песен, показываем список с кнопками
       let message = `🎵 Найдено ${matchedSongs.length} песен с "${query}":\n\n`;
+      
       matchedSongs.forEach((song, index) => {
         message += `${index + 1}. ${song.title}${song.author ? ' - ' + song.author : ''}\n`;
       });
-      message += '\nУкажите номер песни или уточните поиск.';
-      await ctx.reply(message);
+      
+      // Создаем инлайн клавиатуру для выбора песни
+      const inlineKeyboard = [];
+      
+      // Группируем кнопки по 5 в ряд
+      const buttonsPerRow = 5;
+      for (let i = 0; i < matchedSongs.length; i += buttonsPerRow) {
+        const row = [];
+        for (let j = i; j < Math.min(i + buttonsPerRow, matchedSongs.length); j++) {
+          row.push({
+            text: (j + 1).toString(),
+            callback_data: `song_${j}_${query}`
+          });
+        }
+        inlineKeyboard.push(row);
+      }
+      
+      await ctx.reply(message, {
+        reply_markup: {
+          inline_keyboard: inlineKeyboard
+        }
+      });
     } else {
       // Если нашли слишком много, просим уточнить
       await ctx.reply(`⚠️ Найдено слишком много песен (${matchedSongs.length}). Пожалуйста, уточните запрос.`);
