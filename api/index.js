@@ -408,7 +408,7 @@ bot.command('learning', (ctx) => {
   // Используем cleanCommandText для очистки команды
   const query = cleanCommandText(ctx.message.text, 'learning');
   
-  ctx.reply('📚 Материалы для обучения:\n\n<a href="https://drive.google.com/drive/folders/1-5kRHns_k4i7t02uAE1LPp1lMHgqw7xu?usp=drive_link">Открыть папку с материалами</a>', {
+  ctx.reply('📚 Распечатки для разучивания песен:\n\n<a href="https://drive.google.com/drive/folders/1-5kRHns_k4i7t02uAE1LPp1lMHgqw7xu?usp=drive_link">Открыть папку с материалами</a>', {
     parse_mode: 'HTML',
     disable_web_page_preview: true
   });
