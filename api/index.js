@@ -149,7 +149,8 @@ bot.command('help', (ctx) => {
     '/search - Поиск песни в аккорднике\n' +
     '/list - Список всех песен\n' +
     '/circlerules - Правила орлятского круга\n' +
-    '/random - Случайная песня'
+    '/random - Случайная песня\n' +
+    '/learning - Ссылка на материалы для обучения'
   );
 });
 
@@ -397,6 +398,20 @@ bot.command('circlerules', async (ctx) => {
       await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
     }
   }
+});
+
+// Команда /learning
+bot.command('learning', (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
+  
+  // Используем cleanCommandText для очистки команды
+  const query = cleanCommandText(ctx.message.text, 'learning');
+  
+  ctx.reply('📚 Материалы для обучения:\n\n<a href="https://drive.google.com/drive/folders/1-5kRHns_k4i7t02uAE1LPp1lMHgqw7xu?usp=drive_link">Открыть папку с материалами</a>', {
+    parse_mode: 'HTML',
+    disable_web_page_preview: true
+  });
 });
 
 // Обработка callback_query для выбора песни
