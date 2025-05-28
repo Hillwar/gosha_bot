@@ -401,17 +401,53 @@ bot.command('circlerules', async (ctx) => {
 });
 
 // Команда /learning
-bot.command('learning', (ctx) => {
+bot.command('learning', async (ctx) => {
   // Сбрасываем состояние на DEFAULT
   setUserState(ctx.from.id, STATES.DEFAULT);
   
   // Используем cleanCommandText для очистки команды
   const query = cleanCommandText(ctx.message.text, 'learning');
   
-  ctx.reply('📚 Распечатки для разучивания песен:\n\n<a href="https://drive.google.com/drive/folders/1-5kRHns_k4i7t02uAE1LPp1lMHgqw7xu?usp=drive_link">Открыть папку с материалами</a>', {
-    parse_mode: 'HTML',
-    disable_web_page_preview: true
-  });
+  const animation = await animateLoading(
+    ctx, 
+    "📚 Загружаю материалы... ⏳", 
+    ["📚 Загружаю материалы... ⏳", "📚 Загружаю материалы... ⌛", "📚 Подготавливаю ссылку... ⏳", "📚 Подготавливаю ссылку... ⌛"]
+  );
+  
+  try {
+    // Останавливаем анимацию
+    await animation.stop();
+    
+    // Пытаемся удалить сообщение о загрузке
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.deleteMessage(animation.chatId, animation.messageId);
+      }
+    } catch (e) {
+      console.log('Не удалось удалить сообщение загрузки:', e.message);
+    }
+    
+    ctx.reply('📚 Материалы для обучения:\n\n<a href="https://drive.google.com/drive/folders/1-5kRHns_k4i7t02uAE1LPp1lMHgqw7xu?usp=drive_link">Открыть папку с материалами</a>', {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    });
+  } catch (error) {
+    console.error('Ошибка при выполнении команды /learning:', error);
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.editMessageText(
+          animation.chatId, 
+          animation.messageId, 
+          null, 
+          "❌ Произошла ошибка. Попробуйте позже."
+        );
+      } else {
+        await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+      }
+    } catch (e) {
+      await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+    }
+  }
 });
 
 // Обработка callback_query для выбора песни
