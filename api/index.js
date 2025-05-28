@@ -150,7 +150,8 @@ bot.command('help', (ctx) => {
     '/list - Список всех песен\n' +
     '/circlerules - Правила орлятского круга\n' +
     '/random - Случайная песня\n' +
-    '/learning - Ссылка на материалы для обучения'
+    '/learning - Ссылка на материалы для обучения\n' +
+    '/video - Отправить видео-сообщение'
   );
 });
 
@@ -433,6 +434,58 @@ bot.command('learning', async (ctx) => {
     });
   } catch (error) {
     console.error('Ошибка при выполнении команды /learning:', error);
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.editMessageText(
+          animation.chatId, 
+          animation.messageId, 
+          null, 
+          "❌ Произошла ошибка. Попробуйте позже."
+        );
+      } else {
+        await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+      }
+    } catch (e) {
+      await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+    }
+  }
+});
+
+// Команда /video
+bot.command('video', async (ctx) => {
+  // Сбрасываем состояние на DEFAULT
+  setUserState(ctx.from.id, STATES.DEFAULT);
+  
+  // Используем cleanCommandText для очистки команды
+  const query = cleanCommandText(ctx.message.text, 'video');
+  
+  const animation = await animateLoading(
+    ctx, 
+    "🎥 Подготавливаю ссылку... ⏳", 
+    ["🎥 Подготавливаю ссылку... ⏳", "🎥 Подготавливаю ссылку... ⌛", "🎥 Загружаю материалы... ⏳", "🎥 Загружаю материалы... ⌛"]
+  );
+  
+  try {
+    // Останавливаем анимацию
+    await animation.stop();
+    
+    // Пытаемся удалить сообщение о загрузке
+    try {
+      if (animation.messageId) {
+        await ctx.telegram.deleteMessage(animation.chatId, animation.messageId);
+      }
+    } catch (e) {
+      console.log('Не удалось удалить сообщение загрузки:', e.message);
+    }
+
+    // Отправляем ссылку на Яндекс.Диск с видео
+    await ctx.reply('🎥 Видеоуроки по игре на гитаре:\n\n<a href="https://disk.yandex.ru/d/uSuNOmRPbkpnTQ">Открыть папку с видеоуроками</a>', {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    });
+    
+  } catch (error) {
+    console.error('Ошибка при отправке ссылки:', error);
     try {
       if (animation.messageId) {
         await ctx.telegram.editMessageText(
